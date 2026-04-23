@@ -1,0 +1,2490 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Spatial cell segmentation and Deep Visual Proteomics pipeline">
+      
+      
+      
+        <link rel="canonical" href="https://peptiderodriguez.github.io/xldvp_seg/LMD_EXPORT_GUIDE/">
+      
+      
+        <link rel="prev" href="../tutorial/">
+      
+      
+        <link rel="next" href="../cli-reference/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>LMD Export - xldvp_seg</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#lmd-export-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="xldvp_seg" class="md-header__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            xldvp_seg
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              LMD Export
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="xldvp_seg" class="md-nav__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    xldvp_seg
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GETTING_STARTED/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial: Cell Detection & Markers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LMD Export
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LMD Export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-place-reference-crosses-in-napari" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Place Reference Crosses in Napari
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 1: Place Reference Crosses in Napari">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#crosses-json-and-display_transform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Crosses JSON and display_transform
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-export-to-lmd-xml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Export to LMD XML
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Export to LMD XML">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-slide-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-slide export
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-export-multiple-slides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch export (multiple slides)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contour-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contour Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#well-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Well Assignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spatial-clustering-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spatial Clustering (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zone-filtering-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zone Filtering (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replicate-based-export-dvp-proteomics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replicate-Based Export (DVP Proteomics)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinate-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinate System
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mass-spec-queue-thermo-xcalibur" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mass Spec Queue (Thermo Xcalibur)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mass Spec Queue (Thermo Xcalibur)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-384-96-mapping-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the 384 → 96 mapping works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#yaml-config-full-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        YAML config (full reference)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#96-well-slot-allocation-for-blanks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        96-well slot allocation for BLANKs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COORDINATE_SYSTEM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/tl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis Tools (tl)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/slide_analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SlideAnalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/marker_classification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Marker Classification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cluster_features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clustering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/region_clustering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region Clustering (per-region)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/spatial_network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial Networks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/omic_linker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Omic Linker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_PIPELINE_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_LMD_EXPORT_WORKFLOW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ LMD Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_COMMUNITY_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_LUMEN_THRESHOLD_PIPELINE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Lumen Threshold Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BLOCKFACE_REGISTRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block-Face Registration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CLUSTER_DISCOVERY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Morphological Cluster Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MANIFOLD_SAMPLING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifold Sampling for LMD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MK_ANALYSIS_STATUS.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MK Analysis Status (Mar 2026)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Workflow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-place-reference-crosses-in-napari" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Place Reference Crosses in Napari
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 1: Place Reference Crosses in Napari">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#crosses-json-and-display_transform" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Crosses JSON and display_transform
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-export-to-lmd-xml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Export to LMD XML
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Export to LMD XML">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#single-slide-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-slide export
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-export-multiple-slides" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batch export (multiple slides)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#contour-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contour Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#well-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Well Assignment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spatial-clustering-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spatial Clustering (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zone-filtering-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zone Filtering (optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replicate-based-export-dvp-proteomics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replicate-Based Export (DVP Proteomics)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinate-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinate System
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mass-spec-queue-thermo-xcalibur" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mass Spec Queue (Thermo Xcalibur)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Mass Spec Queue (Thermo Xcalibur)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-384-96-mapping-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the 384 → 96 mapping works
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#yaml-config-full-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        YAML config (full reference)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#96-well-slot-allocation-for-blanks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        96-well slot allocation for BLANKs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python API
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="lmd-export-guide">LMD Export Guide<a class="headerlink" href="#lmd-export-guide" title="Permanent link">&para;</a></h1>
+<p>Export scored cell detections to Leica Laser Microdissection (LMD) XML format for automated tissue collection.</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>After running segmentation and scoring detections with a trained classifier, this workflow exports high-confidence detections to Leica LMD XML. The pipeline supports:</p>
+<ul>
+<li><strong>Napari cross placement</strong> -- interactive calibration point placement on CZI slides</li>
+<li><strong>Score-based filtering</strong> -- export only detections above a classifier confidence threshold</li>
+<li><strong>Spatial clustering</strong> -- group nearby detections into wells</li>
+<li><strong>384-well plate layout</strong> -- serpentine well assignment (max 308 wells/plate, multi-plate overflow)</li>
+<li><strong>Contour erosion</strong> -- shrink contours so the laser cuts inside the cell boundary</li>
+<li><strong>Batch export</strong> -- process multiple slides in one command</li>
+<li><strong>Replicate-based export</strong> -- area-normalized replicates for DVP proteomics</li>
+</ul>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>py-lmd library</strong>:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>py-lmd
+</code></pre></div></li>
+<li><strong>Scored detections JSON</strong> from <code>apply_classifier.py</code> (contains <code>rf_prediction</code> scores)</li>
+<li><strong>CZI slide</strong> for cross placement in Napari</li>
+</ol>
+<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
+<h3 id="step-1-place-reference-crosses-in-napari">Step 1: Place Reference Crosses in Napari<a class="headerlink" href="#step-1-place-reference-crosses-in-napari" title="Permanent link">&para;</a></h3>
+<p>Three calibration crosses align the microscope stage coordinates with your image. Place them at landmarks visible under the LMD microscope.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/scripts/napari_place_crosses.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-i<span class="w"> </span>/path/to/slide.czi<span class="w"> </span>--flip-horizontal<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span>-o<span class="w"> </span>/path/to/output/reference_crosses.json
+</code></pre></div>
+<p><strong>Display transforms:</strong> <code>--rotate-cw-90</code> is ON by default (LMD7 tissue-down orientation). Use <code>--no-rotate-cw-90</code> to disable. <code>--flip-horizontal</code> must be specified explicitly.</p>
+<p><strong>Keybinds:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R / 1</td>
+<td>Select cross 1 (red)</td>
+</tr>
+<tr>
+<td>G / 2</td>
+<td>Select cross 2 (green)</td>
+</tr>
+<tr>
+<td>B / 3</td>
+<td>Select cross 3 (cyan)</td>
+</tr>
+<tr>
+<td>Space / P</td>
+<td>Place cross at cursor</td>
+</tr>
+<tr>
+<td>U</td>
+<td>Undo last placement</td>
+</tr>
+<tr>
+<td>S</td>
+<td>Save crosses</td>
+</tr>
+<tr>
+<td>Q</td>
+<td>Save and quit</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Tips:</strong> Choose landmarks visible in both Napari and the LMD microscope. Spread crosses across the tissue. Do not place crosses on cells you intend to collect. Exactly 3 crosses are used for calibration.</p>
+<p>Optional contour overlay: add <code>--contours /path/to/detections.json --color-by well</code> to verify detections while placing crosses.</p>
+<h4 id="crosses-json-and-display_transform">Crosses JSON and display_transform<a class="headerlink" href="#crosses-json-and-display_transform" title="Permanent link">&para;</a></h4>
+<p>The saved JSON stores image dimensions, pixel size (from CZI metadata), cross coordinates in display space, and a <code>display_transform</code> block recording which transforms were active during placement (<code>flip_horizontal</code>, <code>rotate_cw_90</code>). The export script reads <code>display_transform</code> and applies the same transforms to detection contours so they match the cross coordinate space. No manual coordinate conversion is needed.</p>
+<h3 id="step-2-export-to-lmd-xml">Step 2: Export to LMD XML<a class="headerlink" href="#step-2-export-to-lmd-xml" title="Permanent link">&para;</a></h3>
+<h4 id="single-slide-export">Single-slide export<a class="headerlink" href="#single-slide-export" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/run_lmd_export.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/scored_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--crosses<span class="w"> </span>/path/to/reference_crosses.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output/lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>--min-score<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>--generate-controls<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>--export
+</code></pre></div>
+<p>Key flags:
+- <code>--min-score 0.5</code> -- only export detections with <code>rf_prediction &gt;= 0.5</code>
+- <code>--generate-controls</code> -- create paired spatial control wells (offset from each target)
+- <code>--export</code> -- write the LMD XML file (without this, only summary is printed)</p>
+<h4 id="batch-export-multiple-slides">Batch export (multiple slides)<a class="headerlink" href="#batch-export-multiple-slides" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/run_lmd_export.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--input-dir<span class="w"> </span>/path/to/runs<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--crosses-dir<span class="w"> </span>/path/to/crosses<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output/lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--min-score<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--generate-controls<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span>--export
+</code></pre></div>
+<p>The batch mode discovers <code>*_detections.json</code> files in <code>--input-dir</code> and matches each to its <code>*_crosses.json</code> in <code>--crosses-dir</code> by slide name prefix. Slides without exactly 3 crosses are skipped with a warning.</p>
+<h3 id="contour-processing">Contour Processing<a class="headerlink" href="#contour-processing" title="Permanent link">&para;</a></h3>
+<p>Contour simplification, dilation, and erosion are all applied at <strong>LMD export time</strong> (not during detection). The pipeline stores original mask contours as <code>contour_px</code> / <code>contour_um</code>; the export script processes them for LMD hardware:</p>
+<p>Both simplification and dilation use <strong>adaptive</strong> tolerances by default (10% each). These are independently adjustable:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--max-area-change-pct</code></td>
+<td><strong>10.0</strong></td>
+<td>Adaptive RDP: max symmetric-difference deviation (%). Set 0 for fixed <code>--rdp-epsilon</code>.</td>
+</tr>
+<tr>
+<td><code>--max-dilation-area-pct</code></td>
+<td><strong>10.0</strong></td>
+<td>Adaptive dilation: max area increase (%) for laser buffer. Set 0 for fixed <code>--dilation-um</code>.</td>
+</tr>
+<tr>
+<td><code>--dilation-um</code></td>
+<td>0.5</td>
+<td>Fixed dilation distance (only used when <code>--max-dilation-area-pct 0</code>)</td>
+</tr>
+<tr>
+<td><code>--rdp-epsilon</code></td>
+<td>5.0</td>
+<td>Fixed RDP epsilon in pixels (only used when <code>--max-area-change-pct 0</code>)</td>
+</tr>
+<tr>
+<td><code>--erosion-um</code></td>
+<td>0.0</td>
+<td>Shrink contours by absolute distance in um</td>
+</tr>
+<tr>
+<td><code>--erode-pct</code></td>
+<td>0.0</td>
+<td>Shrink contours by percentage of sqrt(area) (e.g., 0.05 = 5%)</td>
+</tr>
+</tbody>
+</table>
+<p>Processing order: simplify (adaptive RDP) → dilate (adaptive buffer) → erode (optional). Erosion is applied last. Use <code>--erosion-um 0.2</code> or <code>--erode-pct 0.05</code> to ensure the laser cuts inside the cell boundary.</p>
+<p><strong>Why adaptive?</strong> Fixed dilation (0.5 um) adds ~17% area to a typical 100 um² cell — large enough to distort area measurements. Adaptive dilation caps the area increase per cell, giving small cells a smaller buffer and large cells a larger one.</p>
+<h3 id="well-assignment">Well Assignment<a class="headerlink" href="#well-assignment" title="Permanent link">&para;</a></h3>
+<p>384-well plate, 4 quadrants, serpentine ordering: B2 -&gt; B3 -&gt; C3 -&gt; C2. Max 308 wells per plate. Multi-plate overflow is automatic when detections exceed plate capacity.</p>
+<p>When <code>--generate-controls</code> is enabled, empty QC wells (~10%) are inserted evenly across the plate. Each target well gets a paired control well containing tissue from the same neighborhood but offset by <code>--control-offset-um</code> (default: 100 um).</p>
+<h3 id="spatial-clustering-optional">Spatial Clustering (optional)<a class="headerlink" href="#spatial-clustering-optional" title="Permanent link">&para;</a></h3>
+<p>To group nearby detections into shared wells:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/scripts/cluster_detections.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/scored_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--min-score<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--output<span class="w"> </span>/path/to/clusters.json
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/run_lmd_export.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/scored_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span>--crosses<span class="w"> </span>/path/to/reference_crosses.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span>--clusters<span class="w"> </span>/path/to/clusters.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output/lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span>--generate-controls<span class="w"> </span>--export
+</code></pre></div>
+<p>Note: when <code>--clusters</code> is provided, the cluster file's own score filtering applies. Do not also pass <code>--min-score</code> (it would double-filter).</p>
+<h3 id="zone-filtering-optional">Zone Filtering (optional)<a class="headerlink" href="#zone-filtering-optional" title="Permanent link">&para;</a></h3>
+<p>If detections have zone assignments (from <code>assign_tissue_zones.py</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>--zone-filter<span class="w"> </span><span class="s2">&quot;1,3,5&quot;</span><span class="w">    </span><span class="c1"># include only these zone IDs</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>--zone-exclude<span class="w"> </span><span class="s2">&quot;0&quot;</span><span class="w">        </span><span class="c1"># exclude these zone IDs</span>
+</code></pre></div>
+<h2 id="replicate-based-export-dvp-proteomics">Replicate-Based Export (DVP Proteomics)<a class="headerlink" href="#replicate-based-export-dvp-proteomics" title="Permanent link">&para;</a></h2>
+<p>For proteomics workflows requiring area-normalized biological replicates across slides:</p>
+<p><strong>Step 1 -- Select cells and assign replicates:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/examples/bone_marrow/select_mks_for_lmd.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span>--score-threshold<span class="w"> </span><span class="m">0</span>.80<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span>--target-area<span class="w"> </span><span class="m">10000</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span>--max-replicates<span class="w"> </span><span class="m">4</span>
+</code></pre></div></p>
+<p>This produces <code>lmd_replicates_full.json</code> with per-cell well assignments and replicate grouping.</p>
+<p><strong>Step 2 -- Export XML from pre-assigned wells:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/scripts/lmd_export_replicates.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span>--sampling-results<span class="w"> </span>lmd_replicates_full.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span>--contours-json<span class="w"> </span>mk_contours_overlay.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span>--crosses-dir<span class="w"> </span>./crosses<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span>--output-dir<span class="w"> </span>./xml
+</code></pre></div></p>
+<p>The replicate export reads <code>display_transform</code> from each slide's crosses file and applies matching coordinate transforms to contours. Pixel size is read from crosses metadata or replicate data (never hardcoded).</p>
+<h2 id="coordinate-system">Coordinate System<a class="headerlink" href="#coordinate-system" title="Permanent link">&para;</a></h2>
+<p>The pipeline handles coordinate transforms automatically:</p>
+<ol>
+<li><strong>Napari placement</strong> -- crosses are placed in display space (after flip/rotate transforms)</li>
+<li><strong>Crosses JSON</strong> -- stores <code>display_transform</code> metadata (<code>flip_horizontal</code>, <code>rotate_cw_90</code>)</li>
+<li><strong>Export</strong> -- applies <code>_transform_native_to_display()</code> to contours, matching them to the cross coordinate space</li>
+<li><strong>LMD Y-flip</strong> -- final Y-axis inversion for stage coordinates (disable with <code>--no-flip-y</code>)</li>
+</ol>
+<p>After CW90 rotation, the display height equals the original CZI width. The export script handles this swap automatically.</p>
+<h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>shapes.xml</code></td>
+<td>Leica LMD XML with calibration points and all contours</td>
+</tr>
+<tr>
+<td><code>shapes.csv</code></td>
+<td>Coordinates with well/cluster assignments</td>
+</tr>
+<tr>
+<td><code>shapes_cluster_summary.json</code></td>
+<td>Cluster details (when <code>--clusters</code> is used)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mass-spec-queue-thermo-xcalibur">Mass Spec Queue (Thermo Xcalibur)<a class="headerlink" href="#mass-spec-queue-thermo-xcalibur" title="Permanent link">&para;</a></h2>
+<p>After LMD cutting, samples are physically transferred from the 384-well
+collection plate into one or more 96-well "boxes" for mass spec. <code>xlseg
+ms-queue</code> turns the replicate manifest into a Thermo Xcalibur queue CSV
+per box — with a sample-key sidecar that joins every raw MS file name back
+to the original sample metadata.</p>
+<h3 id="how-the-384-96-mapping-works">How the 384 → 96 mapping works<a class="headerlink" href="#how-the-384-96-mapping-works" title="Permanent link">&para;</a></h3>
+<p>The LMD plate fills four quadrants (B2, B3, C2, C3). Each quadrant
+(77 wells) repacks 1:1 into a separate 96-well box (A1–G11; row H and
+col 12 of the box stay unused):</p>
+<table>
+<thead>
+<tr>
+<th>384 row (even / odd)</th>
+<th>96 row</th>
+<th></th>
+<th>384 col</th>
+<th>96 col</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>B / C →</td>
+<td>A</td>
+<td></td>
+<td>2 or 3 →</td>
+<td>1</td>
+</tr>
+<tr>
+<td>D / E →</td>
+<td>B</td>
+<td></td>
+<td>4 or 5 →</td>
+<td>2</td>
+</tr>
+<tr>
+<td>F / G →</td>
+<td>C</td>
+<td></td>
+<td>...</td>
+<td>...</td>
+</tr>
+<tr>
+<td>... → G (no P pair)</td>
+<td></td>
+<td></td>
+<td>22 or 23 →</td>
+<td>11</td>
+</tr>
+</tbody>
+</table>
+<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>xlseg<span class="w"> </span>ms-queue<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span>--samples<span class="w">  </span>path/to/replicates.csv<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>--config<span class="w">   </span>path/to/ms_queue.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>path/to/ms_queues/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="o">[</span>--combined<span class="o">]</span><span class="w"> </span><span class="o">[</span>--well-col<span class="w"> </span>well<span class="o">]</span><span class="w"> </span><span class="o">[</span>--plate-col<span class="w"> </span>plate<span class="o">]</span>
+</code></pre></div>
+<p>Only <code>file_name_template</code> and <code>autosampler_slots</code> are required. All blank-
+injection features and sample-ordering tools are optional; layer them as
+your MS protocol dictates.</p>
+<h3 id="yaml-config-full-reference">YAML config (full reference)<a class="headerlink" href="#yaml-config-full-reference" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">file_name_template</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;{date}_OA1_PROJ_{slide}_{bone}_rep{replicate}_{well_384}_S{box}_{well_96}&quot;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nt">autosampler_slots</span><span class="p">:</span><span class="w">              </span><span class="c1"># 384 quadrant -&gt; physical autosampler slot</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">B2</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">B3</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="nt">ms_method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w">                 </span><span class="c1"># path string (Windows auto-formatted) or null</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;D:\\&quot;</span><span class="w">                    </span><span class="c1"># Xcalibur &#39;Path&#39; column value</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="nt">date</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w">                      </span><span class="c1"># default: today&#39;s YYYYMMDD</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="nt">bracket_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># -- interspersed empty wells from the 384 plate (optional) ------------------</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="nt">empty_marker</span><span class="p">:</span><span class="w">                   </span><span class="c1"># rows in the input CSV whose quadrant slot</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="nt">column</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">slide</span><span class="w">                 </span><span class="c1"># is physically empty (e.g. wet-lab QC wells)</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">EMPTY</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="nt">empty_file_name_template</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w">  </span><span class="c1"># default: &quot;{date}_BLANK_plate{plate}_{quadrant}_{well_96}&quot;</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="c1"># -- strip/rewrite input columns before rendering (optional) -----------------</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="nt">column_substitutions</span><span class="p">:</span><span class="w">           </span><span class="c1"># regex str.replace applied to DataFrame pre-sort</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">  </span><span class="nt">slide</span><span class="p">:</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="nt">pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;^2025_11_18_&quot;</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">    </span><span class="nt">replacement</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a>
+<a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a><span class="c1"># -- grouping + separator BLANKs (optional, shape-stratified runs) -----------</span>
+<a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a><span class="nt">group_by_column</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shapes</span><span class="w">         </span><span class="c1"># column to group+sort samples by</span>
+<a id="__codelineno-9-24" name="__codelineno-9-24" href="#__codelineno-9-24"></a><span class="nt">group_by_ascending</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">        </span><span class="c1"># numeric sort when the column coerces cleanly</span>
+<a id="__codelineno-9-25" name="__codelineno-9-25" href="#__codelineno-9-25"></a><span class="nt">group_separator_blanks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">    </span><span class="c1"># insert 1 BLANK between adjacent groups</span>
+<a id="__codelineno-9-26" name="__codelineno-9-26" href="#__codelineno-9-26"></a><span class="nt">group_separator_blank_template</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w">  </span><span class="c1"># default: &quot;{date}_BLANK_{box_key}_{well_96}&quot;</span>
+<a id="__codelineno-9-27" name="__codelineno-9-27" href="#__codelineno-9-27"></a>
+<a id="__codelineno-9-28" name="__codelineno-9-28" href="#__codelineno-9-28"></a><span class="c1"># -- synthetic BLANK injections (optional) -----------------------------------</span>
+<a id="__codelineno-9-29" name="__codelineno-9-29" href="#__codelineno-9-29"></a><span class="nt">bracketing_blanks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span><span class="w">            </span><span class="c1"># N leading + N trailing blanks (max 6). Row H</span>
+<a id="__codelineno-9-30" name="__codelineno-9-30" href="#__codelineno-9-30"></a><span class="w">                                </span><span class="c1"># of the 96-well box: lead=H1..Hn, trail=H(13-n)..H12</span>
+<a id="__codelineno-9-31" name="__codelineno-9-31" href="#__codelineno-9-31"></a><span class="nt">bracketing_blank_template</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w"> </span><span class="c1"># default: &quot;{date}_BLANK_{box_key}_{position_tag}&quot;</span>
+<a id="__codelineno-9-32" name="__codelineno-9-32" href="#__codelineno-9-32"></a><span class="nt">interspersed_blanks</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span><span class="w">          </span><span class="c1"># random blanks spread across each box via</span>
+<a id="__codelineno-9-33" name="__codelineno-9-33" href="#__codelineno-9-33"></a><span class="w">                                </span><span class="c1"># segment-based placement (even distribution)</span>
+<a id="__codelineno-9-34" name="__codelineno-9-34" href="#__codelineno-9-34"></a><span class="nt">interspersed_blank_template</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">null</span><span class="w">   </span><span class="c1"># default: &quot;{date}_BLANK_{box_key}_{well_96}&quot;</span>
+<a id="__codelineno-9-35" name="__codelineno-9-35" href="#__codelineno-9-35"></a>
+<a id="__codelineno-9-36" name="__codelineno-9-36" href="#__codelineno-9-36"></a><span class="nt">shuffle</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-37" name="__codelineno-9-37" href="#__codelineno-9-37"></a><span class="nt">shuffle_seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">42</span>
+</code></pre></div>
+<p><strong>Template fields</strong> available in every <code>*_template</code> string: every input
+column name (post <code>column_substitutions</code>), plus derived fields <code>{date}</code>,
+<code>{well_384}</code>, <code>{well_96}</code>, <code>{quadrant}</code>, <code>{box}</code> (slot number), <code>{plate}</code>.
+Bracketing/separator templates also get <code>{box_key}</code> (e.g. <code>B2</code>,
+<code>plate2_B3</code>) and <code>{position_tag}</code> (<code>lead1</code>/<code>trail1</code>/<code>interspersed1</code>/etc.).
+Derived fields win over input columns of the same name.</p>
+<h3 id="96-well-slot-allocation-for-blanks">96-well slot allocation for BLANKs<a class="headerlink" href="#96-well-slot-allocation-for-blanks" title="Permanent link">&para;</a></h3>
+<p>Real samples fill A1–G11 (the 384→96 repack). BLANKs use the unused
+wells:</p>
+<table>
+<thead>
+<tr>
+<th>Blank kind</th>
+<th>Well pool</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bracketing lead</td>
+<td><code>H1..H{n_bracket}</code></td>
+</tr>
+<tr>
+<td>Bracketing trail</td>
+<td><code>H{13-n_bracket}..H12</code></td>
+</tr>
+<tr>
+<td>Group separator + interspersed</td>
+<td>Middle of row H (<code>H{n+1}..H{12-n}</code>) then column 12 (<code>A12..G12</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Total pool size = 12 (row H) + 7 (col 12) = 19 wells per box. With
+<code>bracketing_blanks=3</code>, that leaves 13 wells for separators + interspersed.
+If the total exceeds the pool, the tool raises <code>ConfigError</code> up front.</p>
+<h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ms_queue_&lt;box_key&gt;.csv</code></td>
+<td>One per filled 384-quadrant box (<code>B2</code> single-plate or <code>plate{N}_{quadrant}</code> multi-plate). Header <code>Bracket Type=N</code>, columns <code>File Name, Path, Instrument Method, Position</code>. Per-box order: lead bracketing → real samples (with separators + interspersed interleaved) → trail bracketing.</td>
+</tr>
+<tr>
+<td><code>ms_queue_combined.csv</code></td>
+<td>Optional (<code>--combined</code>) — per-box blocks concatenated in order (plate asc, then <code>QUADRANT_ORDER</code>). Only the <strong>last</strong> box contributes its trailing bracket; intermediate boundaries show only the next box's lead (single set of N, never 2N).</td>
+</tr>
+<tr>
+<td><code>ms_queue_key.csv</code> + <code>ms_queue_key.json</code></td>
+<td><strong>Sample key</strong>, always written. <code>File Name</code> column 1, every input column, plus derived <code>plate/well_384/quadrant/well_96/slot/Position/box_key/box_row_index/is_empty/instrument_method/queue_date/blank_kind</code>. <code>blank_kind ∈ {"" (real), "empty_well", "bracketing", "group_separator", "interspersed"}</code>. This is the authoritative join table for DIA-NN / Spectronaut / <code>OmicLinker</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="behavior-notes">Behavior notes<a class="headerlink" href="#behavior-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Deterministic shuffle</strong> per <code>(plate, quadrant)</code> from <code>shuffle_seed</code>.
+  Distinct seed offsets per box → independent orderings; reruns are
+  reproducible.</li>
+<li><strong><code>group_by_column</code></strong> sorts numerically when the column coerces cleanly
+  (<code>pd.to_numeric</code>), else lexically. Within each group the standard
+  shuffle still runs — overall order is group-ordered, within-group
+  random.</li>
+<li><strong><code>group_separator_blanks</code></strong> injects one BLANK at every transition
+  between adjacent groups. Separator wells are drawn from the
+  interspersed pool first, before interspersed wells, so the two
+  features coexist without collision.</li>
+<li><strong><code>interspersed_blanks</code></strong> uses a segment-based placement (N equal
+  segments, one random position per segment) — even coverage, not
+  clustered. Not applied to the lead/trail bracketing slots.</li>
+<li><strong>Windows path auto-format</strong> on <code>ms_method</code>: <code>/</code> → <code>\</code>; unix prefixes
+  (<code>/Volumes</code>, <code>/fs/pool</code>, <code>/Users</code>, <code>/home</code>, <code>/mnt</code>) log a warning
+  because Xcalibur on the MS PC will not resolve them.</li>
+<li><strong>Duplicate File Name detection</strong> across the whole run: <code>ConfigError</code>
+  listing collisions — Xcalibur overwrites silently otherwise.</li>
+<li><strong>Multi-plate</strong>: one per-quadrant box file per plate
+  (<code>plate{N}_&lt;quadrant&gt;.csv</code>). The same <code>autosampler_slots</code> applies to
+  every plate — the operator physically swaps boxes between plate runs.</li>
+</ul>
+<h3 id="python-api">Python API<a class="headerlink" href="#python-api" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">xldvp_seg.lmd.ms_queue</span><span class="w"> </span><span class="kn">import</span> <span class="n">ThermoQueueConfig</span><span class="p">,</span> <span class="n">build_thermo_queues</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">cfg</span> <span class="o">=</span> <span class="n">ThermoQueueConfig</span><span class="p">(</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="n">file_name_template</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">{date}</span><span class="s2">_PROJ_</span><span class="si">{slide}</span><span class="s2">_rep</span><span class="si">{replicate}</span><span class="s2">_</span><span class="si">{well_384}</span><span class="s2">_S</span><span class="si">{box}</span><span class="s2">_</span><span class="si">{well_96}</span><span class="s2">&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">autosampler_slots</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;B2&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;B3&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">},</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="c1"># Rule-based method selection is Python-only; YAML accepts only str|null.</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">ms_method</span><span class="o">=</span><span class="k">lambda</span> <span class="n">row</span><span class="p">:</span> <span class="n">methods</span><span class="p">[</span><span class="s2">&quot;high&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;n_cells&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">200</span> <span class="k">else</span> <span class="n">methods</span><span class="p">[</span><span class="s2">&quot;low&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">empty_marker</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;slide&quot;</span><span class="p">,</span> <span class="s2">&quot;EMPTY&quot;</span><span class="p">),</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="n">group_by_column</span><span class="o">=</span><span class="s2">&quot;shapes&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>    <span class="n">group_separator_blanks</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a>    <span class="n">bracketing_blanks</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>    <span class="n">interspersed_blanks</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>    <span class="n">column_substitutions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;slide&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;^2025_11_18_&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)},</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="p">)</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">outputs</span> <span class="o">=</span> <span class="n">build_thermo_queues</span><span class="p">(</span><span class="s2">&quot;replicates.csv&quot;</span><span class="p">,</span> <span class="n">cfg</span><span class="p">,</span> <span class="s2">&quot;out/&quot;</span><span class="p">,</span> <span class="n">combined</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># 1. Detect</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/run_segmentation.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span>--czi-path<span class="w"> </span>/path/to/slide.czi<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span>--cell-type<span class="w"> </span>cell<span class="w"> </span>--channel-spec<span class="w"> </span><span class="s2">&quot;cyto=PM,nuc=488&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">    </span>--all-channels<span class="w"> </span>--output-dir<span class="w"> </span>/path/to/output
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1"># 2. Annotate in HTML viewer, then train + score</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/serve_html.py<span class="w"> </span>/path/to/output
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="c1"># ... annotate ~200 cells, export annotations ...</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/train_classifier.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/output/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="w">    </span>--annotations<span class="w"> </span>annotations.json<span class="w"> </span>--output-dir<span class="w"> </span>/path/to/output
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/scripts/apply_classifier.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/output/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a><span class="w">    </span>--classifier<span class="w"> </span>/path/to/output/rf_classifier.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a><span class="w">    </span>--output<span class="w"> </span>/path/to/output/cell_detections_scored.json
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a><span class="c1"># 3. Place 3 reference crosses in Napari</span>
+<a id="__codelineno-11-19" name="__codelineno-11-19" href="#__codelineno-11-19"></a><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/scripts/napari_place_crosses.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-20" name="__codelineno-11-20" href="#__codelineno-11-20"></a><span class="w">    </span>-i<span class="w"> </span>/path/to/slide.czi<span class="w"> </span>--flip-horizontal<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-21" name="__codelineno-11-21" href="#__codelineno-11-21"></a><span class="w">    </span>-o<span class="w"> </span>/path/to/output/lmd/reference_crosses.json
+<a id="__codelineno-11-22" name="__codelineno-11-22" href="#__codelineno-11-22"></a>
+<a id="__codelineno-11-23" name="__codelineno-11-23" href="#__codelineno-11-23"></a><span class="c1"># 4. Export to LMD XML</span>
+<a id="__codelineno-11-24" name="__codelineno-11-24" href="#__codelineno-11-24"></a><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="nv">$REPO</span><span class="w"> </span><span class="nv">$XLDVP_PYTHON</span><span class="w"> </span><span class="nv">$REPO</span>/run_lmd_export.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-25" name="__codelineno-11-25" href="#__codelineno-11-25"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/output/cell_detections_scored.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-26" name="__codelineno-11-26" href="#__codelineno-11-26"></a><span class="w">    </span>--crosses<span class="w"> </span>/path/to/output/lmd/reference_crosses.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-27" name="__codelineno-11-27" href="#__codelineno-11-27"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output/lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-28" name="__codelineno-11-28" href="#__codelineno-11-28"></a><span class="w">    </span>--min-score<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--generate-controls<span class="w"> </span>--export
+<a id="__codelineno-11-29" name="__codelineno-11-29" href="#__codelineno-11-29"></a>
+<a id="__codelineno-11-30" name="__codelineno-11-30" href="#__codelineno-11-30"></a><span class="c1"># 5. Load shapes.xml into Leica LMD software, cut samples into 384-well plate</span>
+<a id="__codelineno-11-31" name="__codelineno-11-31" href="#__codelineno-11-31"></a>
+<a id="__codelineno-11-32" name="__codelineno-11-32" href="#__codelineno-11-32"></a><span class="c1"># 6. Build Thermo MS queue from the replicate manifest</span>
+<a id="__codelineno-11-33" name="__codelineno-11-33" href="#__codelineno-11-33"></a>xlseg<span class="w"> </span>ms-queue<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-34" name="__codelineno-11-34" href="#__codelineno-11-34"></a><span class="w">    </span>--samples<span class="w"> </span>/path/to/output/lmd/replicates.csv<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-35" name="__codelineno-11-35" href="#__codelineno-11-35"></a><span class="w">    </span>--config<span class="w">  </span>/path/to/ms_queue.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-36" name="__codelineno-11-36" href="#__codelineno-11-36"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output/ms_queues/<span class="w"> </span>--combined
+<a id="__codelineno-11-37" name="__codelineno-11-37" href="#__codelineno-11-37"></a><span class="c1"># -&gt; one queue CSV per 96-well box + sample_key.csv/json for downstream joins</span>
+</code></pre></div>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Need at least 3 reference crosses"</td>
+<td>Place exactly 3 crosses in Napari before saving</td>
+</tr>
+<tr>
+<td>Detections not in correct locations</td>
+<td>Verify crosses were placed with the same <code>--flip-horizontal</code> / <code>--rotate-cw-90</code> that the export expects (check <code>display_transform</code> in crosses JSON)</td>
+</tr>
+<tr>
+<td>Too many detections for one plate</td>
+<td>Multi-plate overflow is automatic (308 wells/plate). Increase <code>--min-score</code> to reduce count</td>
+</tr>
+<tr>
+<td>Contours too large / laser burns neighbors</td>
+<td>Add <code>--erosion-um 0.2</code> or <code>--erode-pct 0.05</code> to shrink contours</td>
+</tr>
+<tr>
+<td>Pixel size mismatch</td>
+<td>Pixel size is auto-detected from CZI metadata in the crosses file. Override with <code>--pixel-size</code> only if needed</td>
+</tr>
+<tr>
+<td>py-lmd import error</td>
+<td><code>pip install py-lmd</code> or <code>pip install git+https://github.com/MannLabs/py-lmd.git</code></td>
+</tr>
+<tr>
+<td>Batch skips a slide</td>
+<td>Ensure the slide has a matching <code>*_crosses.json</code> in <code>--crosses-dir</code> with exactly 3 crosses</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

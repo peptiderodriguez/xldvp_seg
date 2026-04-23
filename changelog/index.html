@@ -1,0 +1,2021 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Spatial cell segmentation and Deep Visual Proteomics pipeline">
+      
+      
+      
+        <link rel="canonical" href="https://peptiderodriguez.github.io/xldvp_seg/changelog/">
+      
+      
+        <link rel="prev" href="../contributing/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Changelog - xldvp_seg</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#changelog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="xldvp_seg" class="md-header__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            xldvp_seg
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Changelog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="xldvp_seg" class="md-nav__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    xldvp_seg
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GETTING_STARTED/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial: Cell Detection & Markers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../LMD_EXPORT_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LMD Export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COORDINATE_SYSTEM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/tl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis Tools (tl)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/slide_analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SlideAnalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/marker_classification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Marker Classification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cluster_features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clustering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/region_clustering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region Clustering (per-region)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/spatial_network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial Networks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/omic_linker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Omic Linker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_PIPELINE_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_LMD_EXPORT_WORKFLOW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ LMD Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_COMMUNITY_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_LUMEN_THRESHOLD_PIPELINE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Lumen Threshold Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BLOCKFACE_REGISTRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block-Face Registration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CLUSTER_DISCOVERY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Morphological Cluster Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MANIFOLD_SAMPLING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifold Sampling for LMD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MK_ANALYSIS_STATUS.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MK Analysis Status (Mar 2026)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[Unreleased]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed-hardening-pass-from-6-agent-code-review-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed — hardening pass from 6-agent code review (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed-baseline-tile-overlap-raised-010-015-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed — baseline tile overlap raised 0.10 → 0.15 (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-preprocessing-cache-generalization-shared-primitives-apr-23-2026-part-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — preprocessing cache generalization + shared primitives (Apr 23 2026, part 2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-flat-field-cache-cellpose-bf16-version-gate-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — flat-field cache + Cellpose BF16 version gate (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-rgb-brightfield-tile-overlap-post-hoc-mask-refinement-apr-2122-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — RGB brightfield + tile overlap + post-hoc mask refinement (Apr 21–22 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#200-2026-03-25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [2.0.0] - 2026-03-25
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[2.0.0] - 2026-03-25">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-01-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [1.0.0] - 2026-01-15
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[1.0.0] - 2026-01-15">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#unreleased" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [Unreleased]
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[Unreleased]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed-hardening-pass-from-6-agent-code-review-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed — hardening pass from 6-agent code review (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed-baseline-tile-overlap-raised-010-015-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed — baseline tile overlap raised 0.10 → 0.15 (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-preprocessing-cache-generalization-shared-primitives-apr-23-2026-part-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — preprocessing cache generalization + shared primitives (Apr 23 2026, part 2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-flat-field-cache-cellpose-bf16-version-gate-apr-23-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — flat-field cache + Cellpose BF16 version gate (Apr 23 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-rgb-brightfield-tile-overlap-post-hoc-mask-refinement-apr-2122-2026" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added — RGB brightfield + tile overlap + post-hoc mask refinement (Apr 21–22 2026)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#200-2026-03-25" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [2.0.0] - 2026-03-25
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[2.0.0] - 2026-03-25">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#100-2026-01-15" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [1.0.0] - 2026-01-15
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[1.0.0] - 2026-01-15">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
+<p>All notable changes to this project will be documented in this file.</p>
+<p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
+and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
+<h2 id="unreleased">[Unreleased]<a class="headerlink" href="#unreleased" title="Permanent link">&para;</a></h2>
+<h3 id="fixed-hardening-pass-from-6-agent-code-review-apr-23-2026">Fixed — hardening pass from 6-agent code review (Apr 23 2026)<a class="headerlink" href="#fixed-hardening-pass-from-6-agent-code-review-apr-23-2026" title="Permanent link">&para;</a></h3>
+<p>Two-phase remediation after parallel bioinformatics-code-review agents flagged issues across detection, analysis, classification, LMD + MS queue, I/O, and testing. All Critical + High items addressed; <strong>50+ new regression tests</strong>; full suite: <strong>1473 passed, 7 skipped, 0 failed</strong>.</p>
+<p><strong>Wrong-results bugs</strong>
+- <strong>Detection resume dropped completed detections on partial re-run</strong> (<code>xldvp_seg/pipeline/detection_loop.py</code>). When <code>0 &lt; completed &lt; total</code>, dedup + finalize saw only the newly-processed subset. Now reloads completed-tile features from disk before the submission loop. For <code>--cell-type vessel</code> partial resumes, emits a warning that cross-tile merge state from completed tiles is not persisted (user should consider full re-run).
+- <strong>Cross-tile merged vessels routed under wrong tile_key</strong> in Phase 1/3 mask-read grouping. Merged vessels now carry <code>skip_postdedup=True</code> with contours set at merge time; excluded from <code>by_tile</code> grouping AND from Phase 2 background correction (their missing <code>_bg_quick_medians</code> would otherwise poison neighbor-median bg estimates with sentinel zeros).
+- <strong>HDF5 mask write race on tile retry</strong> (<code>multigpu_worker.py</code>) → atomic <code>tmp + os.replace</code> pattern.
+- <strong><code>background.has_raw</code> any-of-first-10</strong> silently flipped <code>value_key</code> to <code>_median_raw</code> on mixed-partial-rerun state → majority-of-20 probe.
+- <strong>OmicLinker FDR synthetic 1.0s inflated BH <code>m</code></strong>. Now subsets <code>|r|≥0.2</code> only when the slow (Pearson) path ran; Spearman fast path unchanged (no synthetic 1.0s to exclude). Tracks via a <code>slow_path_prefiltered</code> flag.
+- <strong>MS queue wrote per-box CSVs before validating</strong>. Now accumulates rows, runs dedup + forbidden-char checks, then writes — <code>ConfigError</code> on collision leaves output dir empty.
+- <strong><code>joblib.load</code> exception tuple</strong> missed <code>pickle.UnpicklingError</code> + <code>struct.error</code> from corrupted/truncated blobs → broadened in <code>classification/base.py</code> + <code>utils/detection_utils.py</code>; corrupt classifier files now wrap as <code>ClassificationError</code> / <code>DataLoadError</code>.</p>
+<p><strong>Security</strong>
+- <strong>XSS in annotation-viewer onclick handlers.</strong> <code>onclick="setLabel('{uid}', ...)"</code> used HTML-escape only — a <code>'</code> in a UID broke out of the JS string and could execute arbitrary JS. Nested escape now applied across <code>html_export.py</code>, <code>html_generator.py</code>, <code>html_batch_export.py</code> via new <code>_esc_js_in_attr()</code> helper + <code>&amp;quot;...&amp;quot;</code> outer delimiters.
+- <strong><code>_js_esc</code> extended</strong> to escape <code>&lt;/</code> → <code>&lt;\/</code> and <code>*/</code> → <code>*\/</code> so payloads can't terminate <code>&lt;script&gt;</code> blocks or JS comments.
+- <strong><code>region_viewer.py</code></strong>: replaced client-side <code>innerHTML += '&lt;span&gt;' + l.name</code> with <code>createElement</code> + <code>textContent</code> (DOM injection fix).
+- <strong><code>all_features_json</code></strong> embedded in <code>&lt;script&gt;</code> now uses <code>safe_json</code> (escapes <code>&lt;/script&gt;</code>).
+- <strong><code>serve_html.py</code> PID file</strong> written with <code>0o600</code> perms (was 0o644 — tunnel URL was world-readable via <code>/tmp/xldvp_seg_serve_info.json</code>). Also warns when <code>--path</code> resolves outside typical pipeline output tree.</p>
+<p><strong>Reproducibility</strong>
+- <strong>New <code>xldvp_seg.utils.seeding.resolve_seed()</code></strong> helper with one-shot <code>UserWarning</code> when caller passes <code>seed=None</code> (fallback 42). Distinguishes "deliberate default" from "never supplied".
+- <strong>Seed threaded</strong> through <code>classify_gmm</code>, <code>tl.train</code> (now also uses <code>StratifiedKFold(shuffle=True)</code>), <code>process_region</code>, <code>run_subclustering</code>, <code>ClusteringConfig</code>, and the Louvain / UMAP calls in <code>spatial_network.py</code>.
+- <strong>New <code>--seed</code> CLI flag</strong> on <code>scripts/region_pca_viewer.py</code>, <code>scripts/combined_region_viewer.py</code>, <code>scripts/global_cluster_spatial_viewer.py</code>. Same seed → same PCA / UMAP / Leiden / k-means output.
+- <strong><code>run_segmentation.py</code> HTML subsampling</strong> now uses <code>np.random.default_rng(args.random_seed).choice</code> (was <code>random.sample</code>, which ignored the user's seed).</p>
+<p><strong>Correctness + robustness</strong>
+- <strong><code>apply_classifier.py</code> arity guard</strong>: if a legacy Pipeline's sidecar feature-name file is missing, scoring no longer crashes mid-prediction with an opaque sklearn <code>ValueError</code>; raises <code>ClassificationError</code> with a clear "retrain or restore sidecar" message.
+- <strong><code>VesselClassifier.MODEL_TYPE</code></strong> is now non-empty — the type-mismatch guard at load time no longer silently passes stale saves of one classifier as another.
+- <strong><code>feature_loader._find_feature_names</code></strong> union-scans ≥10 detections (was first-non-empty only — broke when the first had a partial feature set).
+- <strong><code>strategy_factory.py</code></strong> mesothelium no longer defaults <code>pixel_size_um</code> to <code>0.22</code>; raises <code>ConfigError</code> if missing, matching the "never hardcode pixel sizes" rule.
+- <strong><code>multigpu_shm.py</code> SIGINT/SIGTERM handlers</strong> installed in <code>SharedSlideManager.__init__</code> (was module scope). Read-only CLI subcommands (<code>xlseg info</code>, <code>xlseg system</code>, <code>xlseg strategies</code>) no longer hijack <code>Ctrl-C</code> → <code>KeyboardInterrupt</code>.</p>
+<p><strong>Documentation</strong>
+- Subcommand count corrected (13/14/15 → <strong>16</strong>) across <code>README.md</code>, <code>CLAUDE.md</code>, <code>docs/cli-reference.md</code>.
+- <code>CONTRIBUTING.md</code> + <code>docs/tutorial.md</code>: <code>pip install -e ".[dev]"</code> → <code>./install.sh --dev</code>; Python 3.11 only.
+- <code>docs/GETTING_STARTED.md</code>: removed <code>--sample-fraction not too low</code> advice that contradicted the "always 1.0" rule.
+- Root <code>CHANGELOG.md</code> now points here (avoids duplication drift).
+- <code>.claude/commands/lmd-export.md</code>: fixed stale <code>scripts/select_mks_for_lmd.py</code> path → <code>examples/bone_marrow/select_mks_for_lmd.py</code>.
+- <code>mkdocs.yml</code> surfaces previously-orphaned <code>NMJ_LMD_EXPORT_WORKFLOW.md</code> + <code>MK_ANALYSIS_STATUS.md</code>.</p>
+<p><strong>New test files</strong> (8 files, 50+ tests): <code>test_multigpu_worker_mask_write.py</code>, <code>test_background_has_raw.py</code>, <code>test_omic_linker_fdr.py</code>, <code>test_html_xss.py</code>, <code>test_classification_load_errors.py</code>, <code>test_seed_reproducibility.py</code>, <code>test_post_detection_skip.py</code>, <code>test_ms_queue_cli.py</code>.</p>
+<h3 id="changed-baseline-tile-overlap-raised-010-015-apr-23-2026">Changed — baseline tile overlap raised 0.10 → 0.15 (Apr 23 2026)<a class="headerlink" href="#changed-baseline-tile-overlap-raised-010-015-apr-23-2026" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>--tile-overlap</code> default changed from <code>0.10</code> to <code>0.15</code></strong> (<code>xldvp_seg.pipeline.cli</code>). 15% of a 3000-px tile at 0.1722 µm/px is 77 µm on each side, which fully contains cells up to ~155 µm diameter — covering polyploid hepatocytes (octoploid ~80 µm) and most multinucleated cells without the silent edge-bisection artifact the 0.10 default had. MK-scale cells (≥100 µm diameter) still want the explicit <code>--tile-overlap 0.25</code> / <code>tile_overlap: 0.25</code> per the MK strategy guidance. Docs updated in <code>CLAUDE.md</code>, <code>docs/cli-reference.md</code>, <code>docs/GETTING_STARTED.md</code>, <code>.claude/commands/analyze.md</code>.</li>
+</ul>
+<h3 id="added-preprocessing-cache-generalization-shared-primitives-apr-23-2026-part-2">Added — preprocessing cache generalization + shared primitives (Apr 23 2026, part 2)<a class="headerlink" href="#added-preprocessing-cache-generalization-shared-primitives-apr-23-2026-part-2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Tissue-filter cache</strong> (<code>&lt;cache_dir&gt;/tissue_filter.json</code>). The calibration + per-tile tissue scan (~3-4 min per shard) is now cached alongside the flat-field profile. Benefits brightfield equally since tissue filtering runs for both modalities. Cache key: CZI identity (path/mtime/size) + scene + tile_size + tile_overlap + tissue_channel + modality + manual_threshold + n_all_tiles + algorithm_version. Atomic write via <code>atomic_json_dump</code>. POSIX <code>O_CREAT|O_EXCL</code> advisory lock (<code>tissue_filter.computing</code>) serializes the first compute across concurrent shards so only one of N recomputes on cold start; the others poll then load. 3h stale-lock recovery matches flat-field. New module <code>xldvp_seg.preprocessing.tissue_filter_cache</code>.</li>
+<li><strong><code>--flat-field-cache-dir</code> now controls the full preprocessing cache.</strong> The flag name is retained but it's the shared slide-level cache dir for both <code>flat_field_profile.npz</code> and <code>tissue_filter.json</code>. Default remains <code>slide_output_dir</code> (co-located with the run).</li>
+<li><strong>Scene joins the cache key for both caches.</strong> Multi-scene CZIs can have coincidentally-identical <code>slide_shape</code>/<code>n_all_tiles</code> across scenes (e.g. multi-well plates where each well is a scene); without <code>scene</code> in the key a cache from scene 0 could false-hit for scene 1. Pre-scene caches (written before the key existed) are treated as scene=0 for back-compat — in-flight jobs with already-populated caches hit on merge/resume without redundant recompute. Validator log lines now report the raw stored value (or <code>(missing)</code>) instead of the back-compat default so debugging is unambiguous.</li>
+<li><strong>Shared preprocessing-cache primitives</strong> in <code>xldvp_seg.utils.cache_utils</code>: <code>czi_identity()</code> (the CZI path/mtime/size triplet), <code>get_scene()</code> (scene resolver with None-guard for hand-built namespaces), <code>meta_mismatch()</code> (key-by-key freshness check with raw-value reporting and scene back-compat), and the <code>try_acquire_compute_lock</code> / <code>release_compute_lock</code> / <code>wait_for_compute</code> advisory-lock lifecycle. Both the flat-field cache and the tissue cache use these helpers — ~60 lines of duplicated logic collapsed to imports.</li>
+<li><strong>Internal kwarg rename</strong> for accuracy: <code>apply_slide_preprocessing(slide_output_dir=...)</code> → <code>apply_slide_preprocessing(cache_dir=...)</code>. Same for <code>_apply_flat_field_correction</code>. The value is the shared cache dir, not always the slide's output dir. Public CLI flag unchanged.</li>
+<li><strong>Tissue cache robustness</strong>: <code>load()</code> now catches <code>TypeError</code>/<code>ValueError</code> from <code>float(threshold)</code> / <code>list(tiles)</code> coercion so a hand-edited JSON with valid structure but wrong value types falls through to recompute instead of crashing the pipeline. Flat-field <code>load</code> already caught <code>zipfile.BadZipFile</code>/<code>EOFError</code> for corrupt npz files.</li>
+<li><strong>Tests</strong>: <code>test_cache_utils.py</code> (+26 tests) covering czi_identity, get_scene matrix, meta_mismatch with scene back-compat asymmetry, lock lifecycle, and a multiprocess race (spawn 2 children, assert exactly 1 acquires the lock). <code>test_tissue_filter_cache.py</code> (+6 tests): end-to-end compute→save→hit cycle, <code>--flat-field-cache-dir</code> routing for tissue cache, pre-scene back-compat hit + scene=1 miss, wrong-value-type payload recovery. <code>test_flat_field_cache.py</code> (+2 tests): same pre-scene back-compat coverage. Full suite: 1337 passing (+21 this round).</li>
+</ul>
+<h3 id="added-flat-field-cache-cellpose-bf16-version-gate-apr-23-2026">Added — flat-field cache + Cellpose BF16 version gate (Apr 23 2026)<a class="headerlink" href="#added-flat-field-cache-cellpose-bf16-version-gate-apr-23-2026" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Flat-field illumination profile cache</strong> (<code>&lt;slide_output_dir&gt;/flat_field_profile.npz</code>). The ~1-2h slide-wide scan that ran once per fluorescence detection job is now serialized to a metadata-keyed <code>.npz</code> and reused across <code>--tile-shard</code> workers and <code>--resume</code> runs. Cache key covers CZI <code>(path, mtime, size)</code> + channel list + slide shape + <code>photobleaching_correction</code> + <code>ALGORITHM_VERSION</code>; any mismatch recomputes. Write is atomic (<code>.partial.npz</code> → <code>os.replace</code>) and <code>np.load(..., allow_pickle=False)</code> blocks RCE via tampered caches. Corrupt / truncated caches are caught (<code>ValueError</code>, <code>OSError</code>, <code>KeyError</code>, <code>zipfile.BadZipFile</code>, <code>EOFError</code>) and treated as misses. POSIX <code>O_CREAT|O_EXCL</code> advisory lock (<code>flat_field_profile.computing</code>) serializes the first compute across concurrent shards; waiters poll every 30s and retry-acquire after a stale lock is removed so exactly one node recomputes. Lock release is inside a <code>try/finally</code> so SLURM kills during compute never leak the lock. <code>IlluminationProfile.save()</code> / <code>.load()</code> added to the public module. <code>apply_slide_preprocessing(slide_output_dir=...)</code> kwarg + <code>setup_shared_memory</code> now resolves the output dir before preprocessing runs instead of after. Cuts 4-shard n45 re-detection wall time from ~4h (preprocessing repeated per shard) to ~2.5h (one compute + three cache loads). New <code>tests/test_flat_field_cache.py</code> (39 tests).</li>
+<li><strong>Cellpose BFloat16 version gate</strong> (<code>xldvp_seg.utils.device.cellpose_supports_bfloat16</code>). Cellpose 4.x defaults <code>use_bfloat16=True</code>; on torch &lt;2.3 the SAM backbone's relative-position encoding hits <code>upsample_linear1d</code> which had no BFloat16 kernel until 2.3. Symptom was catastrophic and silent: every tile raised <code>"upsample_linear1d_out_frame" not implemented for 'BFloat16'</code>, the pipeline saved 0 detections from 3954 tiles, and exited with code 0 so SLURM reported COMPLETED. Helper parses <code>torch.__version__</code> and returns <code>False</code> on &lt;2.3 or unparseable strings (conservative). All 5 <code>CellposeModel</code> instantiation sites pass <code>use_bfloat16=cellpose_supports_bfloat16()</code>: <code>detection/cell_detector.py</code>, <code>models/manager.py</code>, <code>processing/multigpu_worker.py</code>, <code>pipeline/multigpu_phase4.py</code>, <code>pipeline/samples.py</code>. <code>cell_detector.py</code> logs the fp32 fallback at startup so the ~20% SAM slowdown isn't a silent surprise. Auto-re-enables once env is bumped to torch ≥2.3.</li>
+<li><strong>Cell detection max-area default raised 200 → 2000 µm²</strong> (<code>xldvp_seg.detection.strategies.cell.CellStrategy.max_area_um</code> + <code>xldvp_seg.pipeline.cli</code> <code>--max-cell-area</code>). The 200 µm² default silently dropped polyploid hepatocytes (tetraploid ~400, octoploid ~800) and multinucleated giant cells, which surfaced as truncated manifold-sampling groups on the n45 whole-mouse section. New default covers the biological range; <code>pipeline/detection_setup.py</code> now logs the effective min/max area at startup with biology references so silent caps cannot recur.</li>
+</ul>
+<h3 id="added-rgb-brightfield-tile-overlap-post-hoc-mask-refinement-apr-2122-2026">Added — RGB brightfield + tile overlap + post-hoc mask refinement (Apr 21–22 2026)<a class="headerlink" href="#added-rgb-brightfield-tile-overlap-post-hoc-mask-refinement-apr-2122-2026" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>RGB brightfield CZI support</strong> (H&amp;E-style, single packed-RGB channel). <code>xldvp_seg.pipeline.shm_setup.setup_shared_memory</code> probes channels via <code>loader.is_channel_rgb()</code>; when any channel is RGB it allocates an <code>(H, W, 3)</code> uint8 SHM buffer (instead of the uint16 <code>(H, W, n_ch)</code> default) and passes <code>modality='brightfield'</code> to <code>filter_tissue_tiles</code> so the H&amp;E Otsu path is used for tissue detection. <code>apply_slide_preprocessing</code> now early-returns on RGB (photobleach/flat-field/Reinhard are fluorescence-specific and crash on uint8 RGB). Errors out on mixed RGB+grayscale or multi-channel RGB — single RGB channel only. Existing CZI loader (<code>is_channel_rgb</code>, <code>load_to_shared_memory</code>), MK strategy, and <code>multigpu_worker.py</code> already handled RGB tiles end-to-end; the gap was only in SHM allocation.</li>
+<li><strong><code>tile_size</code> + <code>tile_overlap</code> YAML keys</strong> (<code>scripts/run_pipeline.sh</code>). Default <code>tile_overlap=0.10</code> (66 µm at 0.22 µm/px) is smaller than MK diameter (100–150 µm), so cells at tile edges get bisected and dedup keeps both partial detections. Setting <code>tile_overlap: 0.25</code> (~165 µm) eliminates clipping — bisected cells are now fully contained in at least one tile's overlap zone. Observed: <strong>16-slide MK re-run recovered 151,917 detections at 25% overlap vs 137,782 at 10% (~10% more)</strong>. Cross-tile merging proper is still vessel-only (<code>detect_vessel_structures.py</code>); porting to MK/cell is future work.</li>
+<li><strong><code>scripts/refine_detection_masks.py</code></strong> — generic post-hoc intensity-based mask refinement. Loads per-tile <code>{cell_type}_masks.h5</code> + CZI, applies <code>xldvp_seg.utils.mask_cleanup.refine_mask_intensity</code> per detection (morphological opening + iterative brightness-based boundary peeling using 90th-percentile of mask interior as threshold, largest-CC, size guard reverts at &lt;50%), recomputes <code>contour_px</code>/<code>contour_um</code>/<code>area</code>/<code>area_um2</code>/<code>solidity</code>/<code>circularity</code> from the refined mask, writes <code>{cell_type}_detections_refined.json</code>. Generic — works on any <code>--cell-type</code>/<code>--run-dir</code>/<code>--czi-path</code>, parallelizable with <code>--workers</code>.</li>
+<li><strong>Multi-slide HTML regen</strong>: <code>scripts/regenerate_html.py --czi-dir &lt;dir&gt;</code> groups detections by slide, processes each CZI in its own process (capped at <code>XLDVP_MAX_SLIDE_WORKERS</code>, default 8, to avoid OOM), merges samples into one paginated HTML. Supports alternate detection JSON formats (<code>center_x/center_y</code> → <code>global_center</code> with stage offset, <code>contour_yx</code> [Y,X] → <code>contour_px</code> [X,Y] with stage offset, <code>mk_score</code> → <code>rf_prediction</code>, top-level <code>area_um2</code> → <code>features.area_um2</code>) without mutating caller dicts.</li>
+<li><strong>RGB channel handling in <code>create_sample_from_contours</code></strong>: when channel data is already 3D (brightfield RGB packed as (H, W, 3) uint8), use it directly instead of <code>np.stack([...], axis=-1)</code> which would produce a 4D array that <code>percentile_normalize</code> can't consume.</li>
+<li><strong>Scaled contour thickness in HTML crops</strong>: contour line width now scales with rendered crop size (<code>max(base, rendered_size // 60)</code>) so large cells get proportionally thicker outlines. Fixes the "thin contour on big downscaled cells" visual illusion. Baseline default bumped <code>2 → 6</code>. Applies to both <code>regenerate_html.py</code> and <code>xldvp_seg/pipeline/samples.py</code>.</li>
+</ul>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Module layering cleanup</strong>: <code>xldvp_seg.pipeline.background</code> → <code>xldvp_seg.analysis.background</code> (background subtraction and per-cell bg-corrected feature recomputation are analysis, not pipeline-stage orchestration). All 6 importers updated; external callers must rename their imports.</li>
+<li><strong><code>visualization.encoding.safe_json</code> is now strict-JSON</strong>: <code>NaN</code>/<code>Infinity</code> are replaced with <code>null</code> before serialization (<code>allow_nan=False</code>). stdlib default emits non-standard NaN/Infinity tokens that break <code>JSON.parse</code> in browsers.</li>
+<li><strong>Python 3.11 required</strong> (dropped 3.10). Several scverse deps (anndata ≥0.12, spatialdata ≥0.7, squidpy ≥1.8) require 3.11. CI matrix pinned to 3.11 only. <code>pyproject.toml</code>, <code>install.sh</code>, README, docs all updated.</li>
+<li><strong>Dependency pins hardened</strong> in <code>pyproject.toml</code> to prevent <code>ResolutionTooDeep</code> on fresh installs: <code>numpy&gt;=1.26</code>, <code>pandas&lt;3</code>, <code>anndata&gt;=0.11</code>, <code>spatialdata&gt;=0.7</code>. <code>requirements-lock.txt</code> always used by <code>install.sh</code> — skips pip's resolver entirely. <code>install.sh</code> hardened against silent failures (HTTP errors, missing lock pins, <code>pip install torch</code> no-ops, SAM2 <code>ResolutionTooDeep</code>).</li>
+<li><strong>Cross-platform install</strong>: <code>install.sh</code> explicit paths for Linux + Mac; Windows has a 3-step manual recipe in README (SAM2 checkpoint download included). Apple Silicon MPS autodetected for Cellpose (3-10× faster than CPU).</li>
+</ul>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Reviewer-audit safety fixes</strong> (Apr 20 2026): degenerate-input guards across <code>region_clustering</code> + n45 viewers (<code>find_optimal_k_elbow</code> returns <code>{1: 0.0}</code> sentinel dicts on <code>n&lt;2</code> instead of empty dicts that crashed downstream plotting; <code>cluster_leiden</code> early-returns <code>np.zeros(n)</code> when <code>n&lt;2</code>; <code>region_multinuc_plot.py</code> skips GMM when fewer than 2 regions; <code>global_cluster_spatial_viewer.py</code> + <code>region_pca_viewer.py</code> + <code>combined_region_viewer.py</code> use <code>math.isfinite()</code> before <code>int()</code> coercion on <code>n_nuclei</code>). <code>install.sh</code> hardened: SAM2 checkpoint size check runs unconditionally (catches half-copied files), <code>stat</code> failure is graceful, activate-hook wiring skips the conda <code>base</code> env and refuses <code>CONDA_PREFIX</code> paths with shell metacharacters. New <code>tests/test_cluster_spatial_stats.py</code> (8 tests) + 5 new degenerate-input tests in <code>tests/test_region_clustering.py</code>. Total: <strong>1169 passing tests across 56 files</strong>.</li>
+<li><strong>Global cluster + spatial divergence viewer</strong>: <code>scripts/global_cluster_spatial_viewer.py</code> — inverse of region-first analysis. Clusters ALL nucleated cells globally (Leiden on full PCA-kNN + k-means elbow + HDBSCAN on PCA + HDBSCAN on full UMAP). Spatial divergence metrics per cluster: entropy, <code>n_major_regions</code>, <code>top3_frac</code>, <code>k_90</code>, <code>focal_multimodal</code> (explicitly rewards 2-5 distinct regions — "same feature profile, different anatomy"). Interactive HTML viewer with 4-method coloring toggle, min-cells-per-region threshold, click-to-select on UMAP or spatial map. 520K-cell run ≈ 90-150 min on 64 CPUs.</li>
+<li><strong>Per-region PCA/UMAP + clustering</strong>: <code>xldvp_seg.analysis.region_clustering</code> exposes <code>hopkins_statistic</code>, <code>find_optimal_k_elbow</code>, <code>cluster_leiden</code>, <code>cluster_hdbscan</code>, and <code>process_region</code>. Driven by <code>scripts/region_pca_viewer.py</code> (single-HTML viewer with 4-way color toggle: kmeans/leiden/hdbscan-PCA/hdbscan-UMAP) and <code>scripts/combined_region_viewer.py</code> (2-pane viewer: spatial region map clickable → per-region UMAP). Tested at <code>tests/test_region_clustering.py</code> (12 tests).</li>
+<li><strong>Per-region multinucleation analysis</strong>: <code>scripts/region_multinuc_plot.py</code> generates a 3-panel PNG (histogram+KDE, ranked %multi, stacked n=1/2/3/4+ composition) plus Tukey fences + GMM(k=2 via BIC) outlier detection with a ranked CSV.</li>
+<li><strong>Consolidated transcript tool</strong>: <code>scripts/export_transcript.py</code> merges prior two scripts (<code>export_session_transcript.py</code>, <code>transcript_add_png_export.py</code>) into a single tool with <code>--mode curate</code> (keep/skip review UI) and <code>--mode present</code> (per-card + combined PNG export). Works on any Claude Code session JSONL.</li>
+<li><strong>Environment classification</strong> in <code>scripts/system_info.py</code>: <code>environment</code> field now returns <code>slurm</code> / <code>workstation</code> / <code>laptop</code> (heuristic: ≥16 cores OR ≥64 GB RAM OR has GPU = workstation). <code>/analyze</code> uses this to tailor guidance: SLURM on a cluster, direct <code>xlseg detect</code> on a workstation, expectations set upfront on a laptop. The 75% resource cap already applied everywhere; this just makes the UX path obvious.</li>
+<li><strong>Block-face registration workflow</strong>: register gross tissue photos (phone, dissection scope) to fluorescence CZI via VALIS 2-pass nonrigid registration. Recursive SAM2 auto-segments anatomical regions with area-scaled point density. Per-region UMAP and organ-specific LMD export. See <code>docs/BLOCKFACE_REGISTRATION.md</code>.</li>
+<li><code>_js_esc()</code> function in <code>html_utils.py</code> for safe JavaScript string escaping (separate from <code>_esc()</code> for HTML context). All JS <code>const</code> assignments across <code>html_generator.py</code>, <code>html_batch_export.py</code>, <code>html_export.py</code>, and <code>html_scripts.py</code> now use <code>_js_esc()</code>.</li>
+<li><code>classify_gmm()</code> now performs BIC-based model selection (1 vs 2 components) — returns all-negative for unimodal data instead of forcing a 2-component fit. Configurable <code>posterior_threshold</code> parameter.</li>
+<li><code>classify_otsu()</code> and <code>classify_otsu_half()</code> gain <code>include_zeros</code> parameter for background-corrected data where zeros represent genuine signal.</li>
+<li><code>correlate(fdr_correct=True)</code> applies Benjamini-Hochberg FDR correction to p-value matrix (default on).</li>
+<li><code>rank_proteins(sort_by="p_adjusted")</code> parameter for significance-ordered ranking.</li>
+<li><code>link()</code> adds <code>pool_std_{feature}</code> columns for within-well variability assessment.</li>
+<li><code>ClusteringConfig.pca_variance</code> field makes PCA variance retention configurable (default 0.95).</li>
+<li><code>nuc_channels</code> parameter in <code>count_nuclei_in_cells()</code> and <code>count_nuclei_for_tile()</code> (default <code>[0, 0]</code>).</li>
+<li><code>adata.uns["pipeline"]</code> provenance in <code>build_anndata()</code> (package, version, cell_type).</li>
+<li>82 new tests: <code>test_visualization.py</code> (38), <code>test_lmd_export.py</code> (33), <code>test_api.py</code> integration tests (2), plus 9 fixes to existing tests. Total: 1047 tests across 46 files.</li>
+<li><code>pytest.importorskip("dvpio")</code> guard on dvp-io tests for graceful CI degradation.</li>
+<li><code>xldvp_seg/visualization/</code> package -- reusable HTML visualization components extracted from the monolithic spatial viewer. 8 Python modules (<code>fluorescence.py</code>, <code>colors.py</code>, <code>encoding.py</code>, <code>data_loading.py</code>, <code>graph_patterns.py</code>, <code>html_builder.py</code>, <code>js_loader.py</code>, <code>__init__.py</code>) + 17 JS component files in <code>js/</code> subdirectory.</li>
+<li><code>scripts/generate_contour_viewer.py</code> -- generates self-contained HTML for contour overlays on CZI fluorescence. Supports grouping by configurable field (vessel_type, scale, etc.), R/G/B channel toggle, pan/zoom with RAF batching, viewport culling for 50K+ contours, and click-to-inspect metadata panel.</li>
+<li><code>--marker-snr-channels</code> flag for built-in SNR marker classification during detection (zero extra cost).</li>
+<li><code>--tissue-channels</code> flag (replaces <code>--islet-display-channels</code>) -- generic flag for selecting marker channels that identify tissue regions worth segmenting. Required for islet; optional for other cell types.</li>
+<li><code>xlseg qc</code> subcommand for quick quality checks without HTML viewer (now 13 subcommands total).</li>
+<li>Lazy torch imports for faster package loading (<code>__getattr__</code> pattern in <code>utils/</code> and <code>detection/</code> <code>__init__.py</code>).</li>
+<li><code>xldvp_seg/exceptions.py</code> -- custom exception hierarchy (<code>XldvpSegError</code>, <code>ConfigError</code>, <code>DataLoadError</code>, <code>DetectionError</code>, <code>ClassificationError</code>, <code>ExportError</code>, <code>ChannelResolutionError</code>) with dual-inheritance from builtins for backward compatibility.</li>
+<li><code>xldvp_seg/classification/base.py</code> -- <code>BaseVesselClassifier</code> abstract base class (shared save/load/feature_importance for 4 vessel classifiers).</li>
+<li><code>xldvp_seg/lmd/export.py</code> -- 18 pure-logic LMD export functions promoted from <code>run_lmd_export.py</code> (script reduced from 1,904 to 1,086 lines).</li>
+<li><code>ClusteringConfig</code> dataclass in <code>cluster_features.py</code> replaces <code>SimpleNamespace</code> (28 typed fields, IDE autocomplete).</li>
+<li><code>pl.umap()</code> API implemented (delegates to <code>run_clustering(methods='umap')</code>).</li>
+<li><strong>dvp-io integration</strong>: <code>OmicLinker.load_proteomics_report()</code> parses search engine reports (AlphaDIA, DIANN, MaxQuant, Spectronaut, etc.) directly into the morphology→proteomics linking workflow. dvp-io is now a core dependency.</li>
+<li><code>OmicLinker.available_engines()</code> lists supported proteomics search engines.</li>
+<li><code>xseg.io.read_proteomics()</code> public API function for CSV or dvp-io report loading.</li>
+</ul>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<p><strong>Nuclear counting:</strong>
+- Nuclear-to-cell assignment uses mask overlap instead of centroid lookup. Each nucleus is assigned to the cell with the most overlapping pixels, correctly handling peripheral nuclei in multinucleated cells (megakaryocytes, osteoclasts).
+- Per-nucleus <code>overlap_area_um2</code> (area within assigned cell) for correct N:C ratio; <code>area_um2</code> remains full nuclear area for ploidy. <code>nuclear_area_fraction</code> clamped ≤ 1.0.</p>
+<p><strong>Feature extraction:</strong>
+- Inter-channel ratios (<code>ch{N}_{M}_ratio</code>, <code>channel_specificity</code>) now use median intensities instead of means — robust to outlier pixels (debris, membrane hotspots). Feature key names unchanged; trained classifiers should be retrained.</p>
+<p><strong>Security &amp; deserialization:</strong>
+- <code>torch.load()</code> uses <code>weights_only=True</code> in NMJ strategy and cell detector.
+- <code>joblib.load()</code> in <code>BaseVesselClassifier.load()</code> validates dict type and raises <code>ClassificationError</code> on model type mismatch. <code>load_rf_classifier()</code> raises <code>DataLoadError</code> on unexpected type.
+- <code>safe_json</code> escapes both <code>&lt;/</code> and <code>&lt;!--</code> sequences. <code>_js_esc()</code> function for JS string contexts across all HTML generator files.
+- <code>generate_cross_placement_html()</code> validates numeric inputs are finite before embedding in HTML.</p>
+<p><strong>Marker classification:</strong>
+- <code>classify_gmm()</code> uses BIC model selection (delta ≥ 6 for 2-component preference), returns all-negative when separation &lt; 0.5 AND minor component weight &lt; 0.1. New <code>include_zeros</code> and <code>posterior_threshold</code> parameters.
+- <code>classify_single_marker()</code> passes <code>include_zeros=True</code> to Otsu/Otsu-half/GMM when <code>bg_subtract</code> or <code>global_background</code> is active.</p>
+<p><strong>Pipeline &amp; background correction:</strong>
+- Phase 1 quick medians filter zero-valued pixels (CZI padding). <code>ch{N}_snr</code> always written (0.0 when bg is zero).
+- Phase 3 cleanup in <code>try/finally</code>. Contour global coordinates use float64 (was float32).
+- <code>_extract_centroids()</code> uses NaN + slide-median imputation instead of <code>[0, 0]</code> fallback.
+- <code>correct_all_channels</code> scans first 100 detections for feature keys (was 10).
+- Multi-node sharding: shard 0 writes <code>sampled_tiles.json</code>; others wait and read.
+- OME-Zarr export re-raises <code>MemoryError</code> and <code>OSError</code>.</p>
+<p><strong>Reproducibility:</strong>
+- <code>np.random.default_rng(seed)</code> migration across <code>shm_setup.py</code>, <code>detection_loop.py</code>, <code>stain_normalization.py</code>, <code>tissue.py</code>, <code>processing/pipeline.py</code>, <code>_sample.py</code>.
+- <code>multigpu_worker.py</code> SAM2 cache uses <code>$SLURM_TMPDIR</code> / <code>tempfile.gettempdir()</code> instead of hardcoded <code>/tmp</code>.</p>
+<p><strong>OmicLinker &amp; statistics:</strong>
+- <code>correlate(fdr_correct=True)</code> applies BH FDR correction to p-value matrix. <code>rank_proteins(sort_by="p_adjusted")</code> for significance-ordered ranking.
+- <code>link()</code> adds <code>pool_std_{feature}</code> columns (<code>.fillna(0.0)</code> for single-cell wells).
+- <code>differential_features()</code> returns <code>n_a</code>, <code>n_b</code> sample sizes. Cohen's d capped at ±10 with zero-variance guard.
+- <code>tl.score()</code> defaults missing features to 0.0 (scores all detections, logs warning with feature names).</p>
+<p><strong>Clustering &amp; spatial analysis:</strong>
+- <code>ClusteringConfig.threshold</code> default 0.5 → 0.0. New <code>pca_variance</code> field (default 0.95).
+- <code>discover_channels_from_features()</code> scans first 10 detections instead of breaking after first.
+- <code>pattern_detection.py</code> betweenness refinement uses rank-based demotion (handles tied zero values).
+- <code>_ISLET_MARKER_DEFAULTS</code> emits <code>DeprecationWarning</code> with v3.0 removal timeline.</p>
+<p><strong>SpatialData &amp; export:</strong>
+- SpatialData shape polygons use micron coordinates (matching <code>obsm["spatial"]</code>).
+- <code>adata.uns["pipeline"]</code> provenance in <code>build_anndata()</code>. <code>_discover_features()</code> sorts prefixes by length descending.
+- <code>aggregation.py</code>: <code>*_count</code> columns moved to obs; <code>adata.layers["missing"]</code> stores NaN positions before zero-fill.
+- <code>build_contour_js_data</code> uses random subsampling for spatially unbiased contour selection.</p>
+<p><strong>Model &amp; infrastructure:</strong>
+- <code>models/manager.py</code>: torch/torchvision imports moved inside methods (faster CLI startup). <code>ModelRegistry.reset()</code> for test isolation.
+- <code>_LazyModelDict._load_model</code> marks key as loaded only after successful assignment.
+- <code>vessel_features.py</code>: <code>pixel_size_um</code> default None with warning+fallback (was hardcoded 0.22).
+- <code>count_nuclei_for_tile()</code> promotes dinov2 kwargs to explicit parameters. Centroid-only assignment documented.
+- <code>process_contour()</code> uses <code>cv2.contourArea</code> instead of Shapely Polygon for initial area.</p>
+<p><strong>Module restructuring:</strong>
+- Removed 3 API stubs (<code>pl.spatial</code>, <code>tl.nuclei</code>, <code>io.export_lmd</code>).
+- <code>scripts/generate_multi_slide_spatial_viewer.py</code>: inline JS → <code>load_js()</code> (3,115 → 1,115 lines).
+- <code>html_export.py</code> split into <code>html_utils.py</code>, <code>html_styles.py</code>, <code>html_scripts.py</code> (3,696 → 1,790 lines).
+- <code>html_batch_export.py</code> extracted from <code>html_generator.py</code> (2,247 → 1,236 lines).
+- Exception migration: 82 bare <code>RuntimeError</code>/<code>ValueError</code> → domain-specific exceptions.
+- HTML module consolidation: 5 duplicate functions replaced with shims (-749 lines).
+- <code>py.typed</code> in <code>pyproject.toml</code> package-data. Removed <code>numpy&lt;2.0</code> pin.
+- F841 ruff: 41 dead-code violations fixed. Spatial viewer JS performance optimizations.</p>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Cohen's d epsilon inflation: <code>pooled_std + 1e-10</code> replaced with proper zero-variance guard (<code>cohens_d = 0.0</code> when <code>pooled_var &lt; 1e-20</code>).</li>
+<li><code>rank_proteins()</code> crash on empty result set (no proteins with &gt;=5 non-NA observations).</li>
+<li><code>rank_proteins()</code> missing <code>morph_feature</code> validation (now raises <code>ConfigError</code>).</li>
+<li>Post-detection pipeline logs warning when Phase 1 or Phase 3 failure rate exceeds 5%.</li>
+<li>Background correction tissue-boundary limitation documented in <code>background.py</code> docstring.</li>
+<li><code>base.py</code> load() docstring updated: <code>ValueError</code> -&gt; <code>ClassificationError</code>.</li>
+<li><code>safe_to_uint8</code> docstring corrected: <code>arr // 256</code> -&gt; <code>arr / 256</code> to match code.</li>
+<li>Stale test count updated: 974 → 1047 → <strong>1169</strong> tests across <strong>56</strong> files.</li>
+<li>20+ bug fixes including: SHM leak on resume, marker_profile dict level, non-numeric columns crash, islet hardcoded channel fallback, single-detection sampling, worker BrokenPipeError handling, SHM cleanup PID guard, tile list race condition, temp dir leak in <code>tl.markers()</code>.</li>
+<li>16+ documentation findings (nesting, stale counts, field names).</li>
+<li>mmap chunk boundary escape bug (overlap chunks by 1 byte + try/finally).</li>
+<li><code>sys.exit()</code> in library code replaced with proper exceptions.</li>
+<li>AnnData nuclear fields placement (obs, not X).</li>
+<li>Coordinate mutation safety in position extraction utilities.</li>
+</ul>
+<h2 id="200-2026-03-25">[2.0.0] - 2026-03-25<a class="headerlink" href="#200-2026-03-25" title="Permanent link">&para;</a></h2>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>xlseg</code> unified CLI with 13 subcommands (info, detect, classify, markers, score, cluster, qc, export-lmd, serve, system, models, strategies, download-models)</li>
+<li>Scanpy-style Python API (<code>xldvp_seg.api.{pp,tl,pl,io}</code>)</li>
+<li><code>SlideAnalysis</code> central state object for notebook workflows</li>
+<li>Model registry with modality tracking (fluorescence/brightfield/both)</li>
+<li>Strategy registry with <code>@register_strategy</code> decorator (8 strategies)</li>
+<li>IoU NMS deduplication (<code>--dedup-method iou_nms</code>) via Shapely STRtree</li>
+<li>InstanSeg alternative segmenter (<code>--segmenter instanseg</code>)</li>
+<li>Brightfield foundation models (UNI2, Virchow2, CONCH, Phikon-v2)</li>
+<li>SpatialData/scverse integration with auto-export to zarr</li>
+<li>OME-Zarr auto-generation from shared memory</li>
+<li>Multi-node sharding (<code>--tile-shard INDEX/TOTAL</code>, <code>--merge-shards</code>)</li>
+<li>Direct-to-SHM CZI loading (eliminates ~9 GB peak memory)</li>
+<li>KD-tree local background correction with per-channel caching</li>
+<li>Median-based SNR marker classification (default <code>--method snr</code>)</li>
+<li>Segmentation metrics module (IoU, Dice, Panoptic Quality, Hungarian matching)</li>
+<li>OmicLinker for bridging morphology features to proteomics</li>
+<li>Slide-level and cohort aggregation utilities</li>
+<li>Feature-gated spatial smoothing for UMAP/t-SNE</li>
+<li>Sample dataset generator for testing (500 synthetic detections)</li>
+<li>Channel resolution by name/wavelength (<code>--channel-spec</code>)</li>
+<li><code>run_pipeline.sh</code> YAML config-driven SLURM launcher with downstream job chains</li>
+<li>Pre-commit hooks (ruff + black), Makefile, CI with coverage</li>
+<li>ROI-restricted detection module (<code>xldvp_seg/roi/</code>) with marker threshold, circular object, and polygon/mask ROI discovery</li>
+<li>974 tests passing across 43 test files</li>
+</ul>
+<h3 id="changed_2">Changed<a class="headerlink" href="#changed_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All cell types use unified multi-GPU pipeline (no separate single-GPU path)</li>
+<li>Atomic JSON writes via <code>atomic_json_dump()</code> with orjson acceleration</li>
+<li>ThreadPool-parallelized post-dedup processing (contour, background, intensity)</li>
+<li>Standardized logging with <code>get_logger(__name__)</code> throughout</li>
+</ul>
+<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>shared/</code> backward-compatibility module</li>
+<li>Legacy <code>xldvp-seg</code>, <code>xldvp-seg-nmj</code>, <code>xldvp-seg-serve</code> entry points</li>
+<li>Project-specific scripts moved to <code>examples/</code></li>
+</ul>
+<h2 id="100-2026-01-15">[1.0.0] - 2026-01-15<a class="headerlink" href="#100-2026-01-15" title="Permanent link">&para;</a></h2>
+<h3 id="added_2">Added<a class="headerlink" href="#added_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Initial unified pipeline with NMJ, MK, vessel, cell, islet, mesothelium, tissue_pattern strategies</li>
+<li>Multi-GPU tile processing with shared memory</li>
+<li>Cellpose + SAM2 segmentation</li>
+<li>LMD export with 384-well plate assignment</li>
+<li>HTML annotation viewer</li>
+<li>RF classifier training from annotations</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

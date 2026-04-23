@@ -1,0 +1,2290 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Spatial cell segmentation and Deep Visual Proteomics pipeline">
+      
+      
+      
+        <link rel="canonical" href="https://peptiderodriguez.github.io/xldvp_seg/cli-reference/">
+      
+      
+        <link rel="prev" href="../LMD_EXPORT_GUIDE/">
+      
+      
+        <link rel="next" href="../COORDINATE_SYSTEM/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>CLI Reference - xldvp_seg</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cli-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="xldvp_seg" class="md-header__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            xldvp_seg
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              CLI Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="xldvp_seg" class="md-nav__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    xldvp_seg
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GETTING_STARTED/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial: Cell Detection & Markers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../LMD_EXPORT_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LMD Export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subcommands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Subcommands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg info
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-detect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg detect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-classify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg classify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg markers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-qc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg qc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-export-lmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg export-lmd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-ms-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg ms-queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg serve
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-download-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg download-models
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standalone-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standalone Scripts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Standalone Scripts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#generate_contour_viewerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        generate_contour_viewer.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flag-gotchas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flag Gotchas
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COORDINATE_SYSTEM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/tl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis Tools (tl)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/slide_analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SlideAnalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/marker_classification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Marker Classification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cluster_features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clustering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/region_clustering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region Clustering (per-region)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/spatial_network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial Networks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/omic_linker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Omic Linker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_PIPELINE_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_LMD_EXPORT_WORKFLOW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ LMD Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_COMMUNITY_ANALYSIS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_LUMEN_THRESHOLD_PIPELINE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Lumen Threshold Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BLOCKFACE_REGISTRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block-Face Registration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CLUSTER_DISCOVERY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Morphological Cluster Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MANIFOLD_SAMPLING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifold Sampling for LMD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MK_ANALYSIS_STATUS.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MK Analysis Status (Mar 2026)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#subcommands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subcommands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Subcommands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg info
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-detect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg detect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-classify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg classify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg markers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg cluster
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-qc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg qc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-export-lmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg export-lmd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-ms-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg ms-queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg serve
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-strategies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg strategies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#xlseg-download-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        xlseg download-models
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standalone-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standalone Scripts
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Standalone Scripts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#generate_contour_viewerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        generate_contour_viewer.py
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flag-gotchas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flag Gotchas
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
+<p>The <code>xlseg</code> command provides 16 subcommands covering the full pipeline from
+CZI inspection through detection, classification, and export.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>xlseg<span class="w"> </span>--help
+</code></pre></div>
+<h2 id="subcommands">Subcommands<a class="headerlink" href="#subcommands" title="Permanent link">&para;</a></h2>
+<h3 id="xlseg-info"><code>xlseg info</code><a class="headerlink" href="#xlseg-info" title="Permanent link">&para;</a></h3>
+<p>Inspect CZI metadata -- channels, dimensions, pixel size, scene count.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>xlseg<span class="w"> </span>info<span class="w"> </span>/path/to/slide.czi
+</code></pre></div>
+<p><strong>Always run this before writing any channel configuration.</strong> Channel order
+in CZI files is NOT wavelength-sorted.</p>
+<hr />
+<h3 id="xlseg-detect"><code>xlseg detect</code><a class="headerlink" href="#xlseg-detect" title="Permanent link">&para;</a></h3>
+<p>Run the cell detection pipeline. Supports all 8 detection strategies with
+multi-GPU processing.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>xlseg<span class="w"> </span>detect<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--czi-path<span class="w"> </span>/path/to/slide.czi<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--cell-type<span class="w"> </span>cell<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>--channel-spec<span class="w"> </span><span class="s2">&quot;cyto=PM,nuc=488&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>--all-channels<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>--num-gpus<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/output
+</code></pre></div>
+<p>Key flags:</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--cell-type</code></td>
+<td>Strategy: <code>cell</code>, <code>nmj</code>, <code>mk</code>, <code>vessel</code>, <code>mesothelium</code>, <code>islet</code>, <code>tissue_pattern</code></td>
+</tr>
+<tr>
+<td><code>--channel-spec</code></td>
+<td>Resolve channels by name or wavelength (e.g., <code>"cyto=PM,nuc=488"</code>)</td>
+</tr>
+<tr>
+<td><code>--all-channels</code></td>
+<td>Extract per-channel intensity features (~15 per channel)</td>
+</tr>
+<tr>
+<td><code>--num-gpus N</code></td>
+<td>Number of GPUs (always multi-GPU architecture)</td>
+</tr>
+<tr>
+<td><code>--extract-deep-features</code></td>
+<td>Add ResNet + DINOv2 features (6,144 dims, off by default)</td>
+</tr>
+<tr>
+<td><code>--html-sample-fraction</code></td>
+<td>Subsample HTML viewer (e.g., 0.10 for 10%)</td>
+</tr>
+<tr>
+<td><code>--segmenter</code></td>
+<td><code>cellpose</code> (default) or <code>instanseg</code></td>
+</tr>
+<tr>
+<td><code>--dedup-method</code></td>
+<td><code>mask_overlap</code> (default) or <code>iou_nms</code></td>
+</tr>
+<tr>
+<td><code>--resume</code></td>
+<td>Resume from a previous run directory</td>
+</tr>
+<tr>
+<td><code>--marker-snr-channels</code></td>
+<td>Auto-classify markers during detection using pre-computed SNR &gt;= 1.5 (format: <code>"SMA:1,CD31:3"</code>)</td>
+</tr>
+<tr>
+<td><code>--tissue-channels</code></td>
+<td>Marker channels identifying tissue regions to segment (e.g., <code>"2,3,5"</code>). Required for islet. Not for Cellpose segmentation (use <code>--channel-spec</code>). Legacy: <code>--islet-display-channels</code></td>
+</tr>
+<tr>
+<td><code>--max-cell-area</code></td>
+<td>Max cell area in µm² (default <strong>2000</strong>; covers polyploid hepatocytes, multinucleated giant cells). Raised from 200 in Apr 2026 — prior default silently dropped tetraploid/octoploid hepatocytes.</td>
+</tr>
+<tr>
+<td><code>--min-cell-area</code></td>
+<td>Min cell area in µm² (default <strong>50</strong>)</td>
+</tr>
+<tr>
+<td><code>--tile-overlap</code></td>
+<td>Overlap fraction between adjacent tiles (default <strong>0.15</strong>, covers polyploid hepatocytes up to ~155 µm). Bump to <strong>0.25</strong> for very large cells (MK ≥100 µm, multinucleated giant cells) — smaller overlap bisects large cells at tile edges.</td>
+</tr>
+<tr>
+<td><code>--flat-field-cache-dir</code></td>
+<td>Shared preprocessing-cache dir (flat_field_profile.npz + tissue_filter.json). Default: cache sits in slide_output_dir. Set to a slide-level path to share caches across runs with different <code>--output-dir</code>.</td>
+</tr>
+<tr>
+<td><code>--no-contour-processing</code></td>
+<td>Skip contour extraction from HDF5 masks</td>
+</tr>
+<tr>
+<td><code>--no-background-correction</code></td>
+<td>Skip local background subtraction</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Preprocessing caches</strong> (auto, no opt-in): on first run the pipeline writes two per-slide caches and reuses them on <code>--resume</code>, <code>--tile-shard</code> workers, and parameter sweeps that share <code>--flat-field-cache-dir</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Cache</th>
+<th>What</th>
+<th>Recompute cost saved</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flat_field_profile.npz</code></td>
+<td>Slide-wide illumination estimate</td>
+<td>~1-2h on 5-channel whole-mouse</td>
+<td>Fluorescence only</td>
+</tr>
+<tr>
+<td><code>tissue_filter.json</code></td>
+<td><code>(variance_threshold, tissue_tiles)</code></td>
+<td>~3-4 min per run</td>
+<td>Fluorescence + brightfield</td>
+</tr>
+</tbody>
+</table>
+<p>Cache keys include CZI <code>(path, mtime, size) + scene + algorithm-specific fields + algorithm_version</code>. Any change invalidates. <code>O_CREAT|O_EXCL</code> advisory locks (<code>flat_field_profile.computing</code>, <code>tissue_filter.computing</code>) ensure exactly one shard on cold start recomputes — others poll and load. 3h stale-lock recovery handles crashed computes.</p>
+<hr />
+<h3 id="xlseg-classify"><code>xlseg classify</code><a class="headerlink" href="#xlseg-classify" title="Permanent link">&para;</a></h3>
+<p>Train a random forest classifier from annotated detections.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>xlseg<span class="w"> </span>classify<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--annotations<span class="w"> </span>/path/to/annotations.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/classifiers<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--feature-set<span class="w"> </span>morph
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--feature-set</code></td>
+<td><code>morph</code> (78D), <code>morph_sam2</code> (334D), <code>channel_stats</code>, <code>all</code> (6,478D)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="xlseg-score"><code>xlseg score</code><a class="headerlink" href="#xlseg-score" title="Permanent link">&para;</a></h3>
+<p>Apply a trained classifier to score all detections.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>xlseg<span class="w"> </span>score<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--classifier<span class="w"> </span>/path/to/rf_classifier.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--output<span class="w"> </span>/path/to/cell_detections_scored.json
+</code></pre></div>
+<hr />
+<h3 id="xlseg-markers"><code>xlseg markers</code><a class="headerlink" href="#xlseg-markers" title="Permanent link">&para;</a></h3>
+<p>Classify each cell as marker-positive or marker-negative per fluorescent channel.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>xlseg<span class="w"> </span>markers<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span>--marker-wavelength<span class="w"> </span><span class="m">647</span>,555<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span>--marker-name<span class="w"> </span>SMA,CD31<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span>--czi-path<span class="w"> </span>/path/to/slide.czi
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--marker-wavelength</code></td>
+<td>Wavelengths to resolve (auto-matches CZI channels)</td>
+</tr>
+<tr>
+<td><code>--marker-channel</code></td>
+<td>Direct channel indices (alternative to wavelength)</td>
+</tr>
+<tr>
+<td><code>--marker-name</code></td>
+<td>Human-readable names for each marker</td>
+</tr>
+<tr>
+<td><code>--method</code></td>
+<td><code>snr</code> (default), <code>otsu</code>, <code>otsu_half</code>, <code>gmm</code> (BIC model selection; returns all-negative for unimodal data)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="xlseg-cluster"><code>xlseg cluster</code><a class="headerlink" href="#xlseg-cluster" title="Permanent link">&para;</a></h3>
+<p>Feature clustering with UMAP/t-SNE dimensionality reduction and
+Leiden/HDBSCAN community detection.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>xlseg<span class="w"> </span>cluster<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span>--feature-groups<span class="w"> </span><span class="s2">&quot;morph,channel&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/clusters
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--feature-groups</code></td>
+<td>Comma-separated: <code>morph</code>, <code>shape</code>, <code>color</code>, <code>sam2</code>, <code>channel</code>, <code>deep</code></td>
+</tr>
+<tr>
+<td><code>--clustering</code></td>
+<td><code>leiden</code> (default) or <code>hdbscan</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="xlseg-qc"><code>xlseg qc</code><a class="headerlink" href="#xlseg-qc" title="Permanent link">&para;</a></h3>
+<p>Quick quality check on pipeline output. Prints detection count, feature summary,
+area distribution, classifier scores, marker profiles, per-channel SNR, and
+nuclear counting summary -- no HTML viewer needed.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>xlseg<span class="w"> </span>qc<span class="w"> </span>/path/to/output
+</code></pre></div>
+<hr />
+<h3 id="xlseg-export-lmd"><code>xlseg export-lmd</code><a class="headerlink" href="#xlseg-export-lmd" title="Permanent link">&para;</a></h3>
+<p>Export scored detections to Leica LMD XML format for laser microdissection.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>xlseg<span class="w"> </span>export-lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span>--detections<span class="w"> </span>/path/to/cell_detections_scored.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>--crosses<span class="w"> </span>/path/to/crosses.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>/path/to/lmd<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span>--min-score<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span>--export
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--crosses</code></td>
+<td>Reference cross positions from Napari</td>
+</tr>
+<tr>
+<td><code>--min-score</code></td>
+<td>Minimum classifier score for export</td>
+</tr>
+<tr>
+<td><code>--max-area-change-pct</code></td>
+<td>Adaptive RDP simplification tolerance (default 10%)</td>
+</tr>
+<tr>
+<td><code>--max-dilation-area-pct</code></td>
+<td>Adaptive dilation for laser buffer (default 10%)</td>
+</tr>
+<tr>
+<td><code>--generate-controls</code></td>
+<td>Add control wells</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="xlseg-ms-queue"><code>xlseg ms-queue</code><a class="headerlink" href="#xlseg-ms-queue" title="Permanent link">&para;</a></h3>
+<p>Build Thermo Xcalibur MS queue CSVs from an LMD replicate manifest. Repacks
+384-well quadrants (B2, B3, C2, C3) into 96-well autosampler boxes (A1–G11),
+emits one queue CSV per box, and writes a sample-key sidecar (<code>_key.csv</code> +
+<code>_key.json</code>) that joins each raw <code>File Name</code> back to full sample metadata
+for downstream analysis.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>xlseg<span class="w"> </span>ms-queue<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">    </span>--samples<span class="w">    </span>path/to/replicates.csv<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span>--config<span class="w">     </span>path/to/ms_queue.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span>--output-dir<span class="w"> </span>path/to/ms_queues/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span>--combined
+</code></pre></div>
+<p>CLI flags (all YAML-config-driven — the YAML is the real surface):</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--samples</code></td>
+<td>Input replicates CSV (must have <code>well</code> column; <code>plate</code> optional)</td>
+</tr>
+<tr>
+<td><code>--config</code></td>
+<td>YAML config file (see below)</td>
+</tr>
+<tr>
+<td><code>--well-col</code></td>
+<td>384-well address column (default <code>well</code>)</td>
+</tr>
+<tr>
+<td><code>--plate-col</code></td>
+<td>Plate column for multi-plate inputs (default <code>plate</code>; pass empty for single-plate)</td>
+</tr>
+<tr>
+<td><code>--combined</code></td>
+<td>Additionally write <code>ms_queue_combined.csv</code> — per-box files are always written</td>
+</tr>
+<tr>
+<td><code>--out-prefix</code></td>
+<td>Filename prefix (default <code>ms_queue</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>YAML config keys (see <a href="../LMD_EXPORT_GUIDE/#mass-spec-queue-thermo-xcalibur">LMD Export Guide — Mass Spec Queue</a> for full semantics, templates, and blank-slot geometry):</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>file_name_template</code> <em>(required)</em></td>
+<td>Xcalibur <code>File Name</code> format string (any input column + derived fields)</td>
+</tr>
+<tr>
+<td><code>autosampler_slots</code> <em>(required)</em></td>
+<td><code>{B2: 2, B3: 3, ...}</code> — quadrant → slot</td>
+</tr>
+<tr>
+<td><code>ms_method</code></td>
+<td>Method path (Windows auto-formatted) or <code>null</code></td>
+</tr>
+<tr>
+<td><code>path</code>, <code>date</code>, <code>bracket_type</code></td>
+<td>Xcalibur <code>Path</code>, <code>{date}</code> override, <code>Bracket Type=N</code> header</td>
+</tr>
+<tr>
+<td><code>empty_marker</code></td>
+<td>Flag physical-empty rows in the 384 plate as shuffled-in BLANKs</td>
+</tr>
+<tr>
+<td><code>bracketing_blanks</code></td>
+<td>N leading + N trailing synthetic BLANKs per box (max 6; row H)</td>
+</tr>
+<tr>
+<td><code>interspersed_blanks</code></td>
+<td>N synthetic BLANKs scattered evenly (segment-based) across each box</td>
+</tr>
+<tr>
+<td><code>group_by_column</code> + <code>group_by_ascending</code></td>
+<td>Sort samples by column before shuffling within groups</td>
+</tr>
+<tr>
+<td><code>group_separator_blanks</code></td>
+<td>Inject one BLANK between adjacent groups</td>
+</tr>
+<tr>
+<td><code>column_substitutions</code></td>
+<td>Regex <code>str.replace</code> rewrites applied to input columns before templating</td>
+</tr>
+<tr>
+<td><code>shuffle</code>, <code>shuffle_seed</code></td>
+<td>Deterministic per-(plate, quadrant) shuffle</td>
+</tr>
+<tr>
+<td><code>{empty,bracketing,interspersed,group_separator}_blank_template</code></td>
+<td>Per-BLANK-kind filename template overrides</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="xlseg-serve"><code>xlseg serve</code><a class="headerlink" href="#xlseg-serve" title="Permanent link">&para;</a></h3>
+<p>Launch the HTML detection viewer with Cloudflare tunnel.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>xlseg<span class="w"> </span>serve<span class="w"> </span>/path/to/output
+</code></pre></div>
+<hr />
+<h3 id="xlseg-system"><code>xlseg system</code><a class="headerlink" href="#xlseg-system" title="Permanent link">&para;</a></h3>
+<p>Show system information: CPU, RAM, GPU, SLURM partition availability,
+and resource recommendations.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>xlseg<span class="w"> </span>system
+</code></pre></div>
+<hr />
+<h3 id="xlseg-models"><code>xlseg models</code><a class="headerlink" href="#xlseg-models" title="Permanent link">&para;</a></h3>
+<p>List all registered model checkpoints with feature dimensions,
+modality, and HuggingFace availability.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>xlseg<span class="w"> </span>models
+</code></pre></div>
+<hr />
+<h3 id="xlseg-strategies"><code>xlseg strategies</code><a class="headerlink" href="#xlseg-strategies" title="Permanent link">&para;</a></h3>
+<p>List all registered detection strategies.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>xlseg<span class="w"> </span>strategies
+</code></pre></div>
+<hr />
+<h3 id="xlseg-download-models"><code>xlseg download-models</code><a class="headerlink" href="#xlseg-download-models" title="Permanent link">&para;</a></h3>
+<p>Download gated model checkpoints from HuggingFace (requires HF token).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>xlseg<span class="w"> </span>download-models<span class="w"> </span>--brightfield<span class="w">   </span><span class="c1"># UNI2, Virchow2, CONCH, Phikon-v2</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>xlseg<span class="w"> </span>download-models<span class="w"> </span>--all<span class="w">           </span><span class="c1"># All registered models</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>xlseg<span class="w"> </span>download-models<span class="w"> </span>--model<span class="w"> </span>uni2<span class="w">    </span><span class="c1"># Specific model</span>
+</code></pre></div>
+<h2 id="standalone-scripts">Standalone Scripts<a class="headerlink" href="#standalone-scripts" title="Permanent link">&para;</a></h2>
+<h3 id="generate_contour_viewerpy"><code>generate_contour_viewer.py</code><a class="headerlink" href="#generate_contour_viewerpy" title="Permanent link">&para;</a></h3>
+<p>Generate a self-contained HTML viewer for contour overlays on CZI fluorescence.
+Loads contours from JSON files (vessel lumens, cell detections), groups by a
+configurable field, and renders with pan/zoom, viewport culling for 50K+ contours,
+R/G/B channel toggle, and click-to-inspect metadata panel.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>python<span class="w"> </span>scripts/generate_contour_viewer.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">    </span>--contours<span class="w"> </span>vessel_lumens.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span>--group-field<span class="w"> </span>vessel_type<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span>--czi-path<span class="w"> </span>slide.czi<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">    </span>--display-channels<span class="w"> </span><span class="m">1</span>,3,0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">    </span>--channel-names<span class="w"> </span><span class="s2">&quot;SMA,CD31,nuc&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">    </span>--title<span class="w"> </span><span class="s2">&quot;Vessel Lumen Detection&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">    </span>--output<span class="w"> </span>vessel_viewer.html
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--contours</code></td>
+<td>Path to JSON file with contour data (vessel lumens, cell detections)</td>
+</tr>
+<tr>
+<td><code>--group-field</code></td>
+<td>Field to group contours by (e.g., <code>vessel_type</code>, <code>scale</code>, <code>marker_profile</code>)</td>
+</tr>
+<tr>
+<td><code>--czi-path</code></td>
+<td>CZI file for fluorescence background</td>
+</tr>
+<tr>
+<td><code>--display-channels</code></td>
+<td>Comma-separated channel indices for R,G,B display</td>
+</tr>
+<tr>
+<td><code>--channel-names</code></td>
+<td>Comma-separated human-readable channel names</td>
+</tr>
+<tr>
+<td><code>--title</code></td>
+<td>Viewer title</td>
+</tr>
+<tr>
+<td><code>--output</code></td>
+<td>Output HTML file path</td>
+</tr>
+</tbody>
+</table>
+<p>The viewer uses the <code>xldvp_seg.visualization</code> package for CZI thumbnail loading,
+color palette assignment, binary data encoding, and composable JS components.</p>
+<hr />
+<h2 id="flag-gotchas">Flag Gotchas<a class="headerlink" href="#flag-gotchas" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>--no-normalize-features</code> disables flat-field (no <code>--flat-field-correction</code> flag exists)</li>
+<li><code>--photobleaching-correction</code> (with <code>-ing</code>) is experimental</li>
+<li><code>--sequential</code> does not exist -- use <code>--num-gpus 1</code></li>
+<li><code>--sample-fraction</code> is always 1.0 -- use <code>--html-sample-fraction</code> to subsample the viewer</li>
+<li><code>--nuclear-channel</code> / <code>--membrane-channel</code> are islet-only</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

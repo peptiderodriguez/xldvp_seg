@@ -1,0 +1,2090 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Spatial cell segmentation and Deep Visual Proteomics pipeline">
+      
+      
+      
+        <link rel="canonical" href="https://peptiderodriguez.github.io/xldvp_seg/VESSEL_COMMUNITY_ANALYSIS/">
+      
+      
+        <link rel="prev" href="../NMJ_LMD_EXPORT_WORKFLOW/">
+      
+      
+        <link rel="next" href="../VESSEL_LUMEN_THRESHOLD_PIPELINE/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Vessel Analysis - xldvp_seg</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#vessel-analysis" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="xldvp_seg" class="md-header__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            xldvp_seg
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Vessel Analysis
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="xldvp_seg" class="md-nav__button md-logo" aria-label="xldvp_seg" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    xldvp_seg
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/peptiderodriguez/xldvp_seg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    peptiderodriguez/xldvp_seg
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GETTING_STARTED/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial: Cell Detection & Markers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../LMD_EXPORT_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LMD Export
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COORDINATE_SYSTEM/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coordinate System
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/tl/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis Tools (tl)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/slide_analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SlideAnalysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/marker_classification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Marker Classification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cluster_features/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clustering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/region_clustering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region Clustering (per-region)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/spatial_network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spatial Networks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/omic_linker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Omic Linker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/visualization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Visualization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_PIPELINE_GUIDE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../NMJ_LMD_EXPORT_WORKFLOW/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NMJ LMD Workflow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Analysis
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tool-1-lumen-first-vessel-detection-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 1: Lumen-First Vessel Detection (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-2-graph-topology-vessel-detection-complementary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 2: Graph Topology Vessel Detection (Complementary)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-2-vessel-community-analysis-multi-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 2: Vessel Community Analysis (Multi-Scale)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How It Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-multi-scale-connected-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Multi-Scale Connected Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-morphology-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Morphology Classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-vessel-type-inference-snr-informed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Vessel Type Inference (SNR-Informed)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-hierarchical-nesting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Hierarchical Nesting
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#snr-vs-background-corrected-intensity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SNR vs Background-Corrected Intensity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#squidpy-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Squidpy Integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#leiden-clustering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leiden Clustering
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../VESSEL_LUMEN_THRESHOLD_PIPELINE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Vessel Lumen Threshold Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BLOCKFACE_REGISTRATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Block-Face Registration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CLUSTER_DISCOVERY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Morphological Cluster Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MANIFOLD_SAMPLING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manifold Sampling for LMD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MK_ANALYSIS_STATUS.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MK Analysis Status (Mar 2026)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tool-1-lumen-first-vessel-detection-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 1: Lumen-First Vessel Detection (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-2-graph-topology-vessel-detection-complementary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 2: Graph Topology Vessel Detection (Complementary)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-2-vessel-community-analysis-multi-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool 2: Vessel Community Analysis (Multi-Scale)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cli-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CLI Options
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How It Works
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How It Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-multi-scale-connected-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Multi-Scale Connected Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-morphology-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Morphology Classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-vessel-type-inference-snr-informed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Vessel Type Inference (SNR-Informed)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-hierarchical-nesting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Hierarchical Nesting
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#snr-vs-background-corrected-intensity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SNR vs Background-Corrected Intensity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#squidpy-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Squidpy Integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#leiden-clustering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leiden Clustering
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="vessel-analysis">Vessel Analysis<a class="headerlink" href="#vessel-analysis" title="Permanent link">&para;</a></h1>
+<p>Three complementary tools for vessel analysis from classified cell detections.</p>
+<h2 id="tool-1-lumen-first-vessel-detection-recommended">Tool 1: Lumen-First Vessel Detection (Recommended)<a class="headerlink" href="#tool-1-lumen-first-vessel-detection-recommended" title="Permanent link">&para;</a></h2>
+<p><strong>Script:</strong> <code>scripts/segment_vessel_lumens.py</code></p>
+<p>Uses SAM2 automatic mask generation on OME-Zarr multi-resolution tiles to find vessel lumens (dark tissue-free regions), validates them by proximity of marker-positive cells (SMA+, CD31+, LYVE1+), then characterizes each vessel with morphometry, marker composition, spatial layering, and type assignment.</p>
+<p><strong>Key design:</strong> No circularity requirement — oblique cuts, compressed vessels, and irregular lumens are all valid. Lumens are validated by biological evidence (marker+ cells at the boundary), not geometric shape.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>scripts/segment_vessel_lumens.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--zarr-path<span class="w"> </span>output/slide.ome.zarr<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--detections<span class="w"> </span>output/top5pct/cell_detections_top5pct.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>--marker-names<span class="w"> </span>SMA,CD31<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span>--rgb-channels<span class="w"> </span><span class="m">1</span>,3,0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span>--scales<span class="w"> </span><span class="m">2</span>,4,8,16<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span>--output-dir<span class="w"> </span>output/vessel_lumens/
+</code></pre></div>
+<p><strong>Pipeline:</strong>
+1. Multi-scale tiling: reads OME-Zarr at 4 scales (2x, 4x, 8x, 16x)
+2. SAM2 auto-mask per tile → candidate regions
+3. 3-layer filter: size bounds + interior darkness + boundary contrast ratio
+4. Cross-tile IoU dedup (Shapely STRtree)
+5. Cross-scale merge (finest-first priority)
+6. Biological validation: KD-tree finds marker+ cells near lumen boundary, coverage metric rejects tissue tears/artifacts
+7. Vessel characterization via shared <code>xldvp_seg.analysis.vessel_characterization</code> module</p>
+<p><strong>Parameters:</strong>
+- <code>--rgb-channels</code>: 3 zarr channel indices for SAM2 RGB input
+- <code>--scales</code>: downscale factors (default: 2,4,8,16)
+- <code>--min-contrast</code>: boundary/interior contrast ratio (default: 1.5)
+- <code>--min-coverage</code>: boundary cell coverage threshold (default: 0.1)
+- <code>--tile-size</code>: tile side length (default: 3000px)
+- <code>--overlap</code>: tile overlap (default: 750px, ~25% — ensures most lumens fit in at least one tile)
+- <code>--save-debug</code>: save rejected lumens with rejection reasons</p>
+<p><strong>Outputs:</strong> <code>vessel_lumens.json</code>, <code>cell_detections_vessels.json</code>, <code>cell_detections_vessel_only.json</code>, <code>vessel_summary.csv</code>.</p>
+<p><strong>Vessel typing</strong> (shared with Tool 2 via <code>xldvp_seg.analysis.vessel_characterization</code>):
+- Artery/arteriole: thick SMA wall (layers &gt; 1.5 or wall/diameter &gt; 0.3)
+- Vein/venule: CD31-dominant thin wall
+- Lymphatic: LYVE1+ dominant (&gt; 30%), no SMA
+- Collecting lymphatic: LYVE1+ with SMA ≥ 15%
+- Capillary: small CD31+ cluster
+- Longitudinal variants: detected when lumen elongation &gt; 4.0</p>
+<p><strong>Visualize results with the contour viewer:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>scripts/generate_contour_viewer.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>--contours<span class="w"> </span>output/vessel_lumens/vessel_lumens.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span>--group-field<span class="w"> </span>vessel_type<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span>--czi-path<span class="w"> </span>slide.czi<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span>--display-channels<span class="w"> </span><span class="m">1</span>,3,0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span>--channel-names<span class="w"> </span><span class="s2">&quot;SMA,CD31,nuc&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span>--title<span class="w"> </span><span class="s2">&quot;Vessel Lumen Detection&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span>--output<span class="w"> </span>output/vessel_lumens/vessel_viewer.html
+</code></pre></div>
+This generates a self-contained HTML with contour overlays on fluorescence, pan/zoom for 50K+ contours, per-vessel-type color toggling, and click-to-inspect metadata.</p>
+<p><strong>When to use:</strong> Cross-sectional vessels where lumens are visible. Handles all sizes from capillaries to aorta. Best for vasculature (Fig6) and lymphatics (Fig7) slides.</p>
+<h2 id="tool-2-graph-topology-vessel-detection-complementary">Tool 2: Graph Topology Vessel Detection (Complementary)<a class="headerlink" href="#tool-2-graph-topology-vessel-detection-complementary" title="Permanent link">&para;</a></h2>
+<p><strong>Script:</strong> <code>scripts/detect_vessel_structures.py</code></p>
+<p>Identifies individual vessel structures from marker-positive cells (SMA+, CD31+, LYVE1+) using graph topology (ring_score, arc_fraction, linearity) and geometric/PCA metrics (circularity, hollowness, elongation). Best for <strong>longitudinal sections</strong> (strips) and structures where lumens are not visible. Classifies morphology (ring, arc, strip, cluster), computes vessel morphometry, analyzes spatial marker layering (Mann-Whitney U), and assigns vessel types. Shares characterization logic with Tool 1 via <code>xldvp_seg.analysis.vessel_characterization</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>scripts/detect_vessel_structures.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--detections<span class="w"> </span>cell_detections_classified.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--marker-filter<span class="w"> </span><span class="s2">&quot;SMA_class==positive&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span>--marker-filter<span class="w"> </span><span class="s2">&quot;CD31_class==positive&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span>--marker-logic<span class="w"> </span>or<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span>--radius<span class="w"> </span><span class="m">50</span><span class="w"> </span>--min-cells<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span>--output-dir<span class="w"> </span>vessel_structures/<span class="w"> </span>--output-prefix<span class="w"> </span>vessel
+</code></pre></div>
+<p>Key parameters:
+- <code>--marker-filter</code>: repeat for each vessel marker (OR logic by default)
+- <code>--radius</code>: connection distance in µm (30-75 typical)
+- <code>--min-cells</code>: minimum cells per vessel structure (5-15)
+- <code>--linearity-threshold</code>: strip detection cutoff (default 3.0)
+- <code>--ring-threshold</code>: ring score cutoff (default 0.5)</p>
+<p>Outputs: <code>cell_detections_vessel_tagged.json</code>, <code>cell_detections_vessel_only.json</code>, <code>vessel_structures.json</code>, <code>vessel_structures.csv</code>.</p>
+<p>Uses the shared <code>xldvp_seg.utils.graph_topology</code> module (also used by <code>detect_curvilinear_patterns.py</code> for mesothelium strip detection).</p>
+<h2 id="tool-2-vessel-community-analysis-multi-scale">Tool 2: Vessel Community Analysis (Multi-Scale)<a class="headerlink" href="#tool-2-vessel-community-analysis-multi-scale" title="Permanent link">&para;</a></h2>
+<p><strong>Script:</strong> <code>scripts/vessel_community_analysis.py</code></p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>This workflow takes cell detections that have been classified by marker expression (SMA, CD31) and groups marker-positive cells into vessel structures at multiple spatial scales. Each structure is classified by morphology (ring, arc, linear, cluster) and vessel type (artery-like, vein-like, capillary-like, endothelial network).</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Cell detections</strong> from the pipeline (<code>cell_detections.json</code>)</li>
+<li><strong>Marker classification</strong> via <code>classify_markers.py</code> → <code>cell_detections_classified.json</code></li>
+<li>Requires SMA and CD31 marker labels</li>
+<li>Uses SNR (signal-to-noise ratio) values for classification</li>
+</ol>
+<h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># 1. Classify markers (if not already done)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>python<span class="w"> </span>scripts/classify_markers.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--detections<span class="w"> </span>cell_detections.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--marker-wavelength<span class="w"> </span><span class="m">647</span>,555<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--czi-path<span class="w"> </span>slide.czi<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--marker-name<span class="w"> </span>SMA,CD31<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span>--method<span class="w"> </span>otsu
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="c1"># 2. Run vessel community analysis</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>python<span class="w"> </span>scripts/vessel_community_analysis.py<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">    </span>--detections<span class="w"> </span>cell_detections_classified.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span>--output-dir<span class="w"> </span>vessel_analysis/<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span>--generate-viewer<span class="w"> </span>--run-squidpy<span class="w"> </span>--run-leiden
+</code></pre></div>
+<h2 id="cli-options">CLI Options<a class="headerlink" href="#cli-options" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--detections</code></td>
+<td>(required)</td>
+<td>Path to classified detections JSON</td>
+</tr>
+<tr>
+<td><code>--marker-field</code></td>
+<td><code>marker_profile</code></td>
+<td>Feature field with combined marker label</td>
+</tr>
+<tr>
+<td><code>--positive-values</code></td>
+<td><code>SMA+/CD31-,SMA-/CD31+,SMA+/CD31+</code></td>
+<td>Which profiles count as positive</td>
+</tr>
+<tr>
+<td><code>--marker-names</code></td>
+<td><code>SMA,CD31</code></td>
+<td>Marker names (maps to <code>{name}_snr</code>, <code>{name}_class</code>)</td>
+</tr>
+<tr>
+<td><code>--radii</code></td>
+<td><code>25,50,100,200</code></td>
+<td>Spatial radii in microns</td>
+</tr>
+<tr>
+<td><code>--best-radius</code></td>
+<td><code>50</code></td>
+<td>Primary radius for cell assignment</td>
+</tr>
+<tr>
+<td><code>--min-cells</code></td>
+<td><code>3</code></td>
+<td>Minimum cells per structure</td>
+</tr>
+<tr>
+<td><code>--output-dir</code></td>
+<td>(same as input)</td>
+<td>Output directory</td>
+</tr>
+<tr>
+<td><code>--generate-viewer</code></td>
+<td>off</td>
+<td>Generate interactive HTML viewer</td>
+</tr>
+<tr>
+<td><code>--run-squidpy</code></td>
+<td>off</td>
+<td>Run squidpy spatial statistics</td>
+</tr>
+<tr>
+<td><code>--run-leiden</code></td>
+<td>off</td>
+<td>Leiden clustering on full feature space (morph + SNR + SAM2)</td>
+</tr>
+<tr>
+<td><code>--leiden-resolution</code></td>
+<td><code>0.5</code></td>
+<td>Leiden resolution parameter (higher = more clusters)</td>
+</tr>
+<tr>
+<td><code>--snr-channels</code></td>
+<td>auto-detect</td>
+<td>Channel indices for SNR keys (e.g. <code>1,3</code> → <code>ch1_snr</code>, <code>ch3_snr</code>)</td>
+</tr>
+<tr>
+<td><code>--viewer-group-field</code></td>
+<td><code>vessel_type</code></td>
+<td>Field to color by in viewer</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-it-works">How It Works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<h3 id="1-multi-scale-connected-components">1. Multi-Scale Connected Components<a class="headerlink" href="#1-multi-scale-connected-components" title="Permanent link">&para;</a></h3>
+<p>For each radius r in [25, 50, 100, 200] um:
+- Build KD-tree from positive cell coordinates
+- Find all cell pairs within distance r
+- Build sparse adjacency matrix
+- Extract connected components (scipy.sparse.csgraph)
+- Filter components with ≥ min_cells</p>
+<p>Smaller radii capture fine structures (capillaries), larger radii merge nearby cells into larger structures (arteries, veins).</p>
+<h3 id="2-morphology-classification">2. Morphology Classification<a class="headerlink" href="#2-morphology-classification" title="Permanent link">&para;</a></h3>
+<p>Each component is classified using the same thresholds as the spatial viewer:</p>
+<table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Criteria</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>linear</strong></td>
+<td>PCA elongation &gt; 4, no curvature</td>
+</tr>
+<tr>
+<td><strong>arc</strong></td>
+<td>PCA elongation &gt; 3, has curvature (R² &gt; 0.3)</td>
+</tr>
+<tr>
+<td><strong>ring</strong></td>
+<td>circularity &gt; 0.65, hollowness &gt; 0.55, elongation &lt; 3</td>
+</tr>
+<tr>
+<td><strong>cluster</strong></td>
+<td>default (all others)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-vessel-type-inference-snr-informed">3. Vessel Type Inference (SNR-Informed)<a class="headerlink" href="#3-vessel-type-inference-snr-informed" title="Permanent link">&para;</a></h3>
+<p>Uses marker composition + morphology + mean SNR:</p>
+<table>
+<thead>
+<tr>
+<th>Vessel Type</th>
+<th>Criteria</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>artery_like</strong></td>
+<td>Ring morphology, SMA fraction &gt; 50%</td>
+</tr>
+<tr>
+<td><strong>vein_like</strong></td>
+<td>Cluster/arc, SMA fraction &gt; 30%, high mean SMA SNR</td>
+</tr>
+<tr>
+<td><strong>capillary_like</strong></td>
+<td>Small (&lt;10 cells), CD31 fraction &gt; 50%</td>
+</tr>
+<tr>
+<td><strong>endothelial_network</strong></td>
+<td>Linear, CD31 fraction &gt; 50%</td>
+</tr>
+<tr>
+<td><strong>unclassified</strong></td>
+<td>None of the above</td>
+</tr>
+</tbody>
+</table>
+<h3 id="4-hierarchical-nesting">4. Hierarchical Nesting<a class="headerlink" href="#4-hierarchical-nesting" title="Permanent link">&para;</a></h3>
+<p>Fine-scale structures are mapped to their coarse-scale parents by cell index overlap. This reveals how capillary-scale structures nest within larger vascular zones.</p>
+<h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vessel_structures.csv</code></td>
+<td>One row per structure: morphology, vessel type, composition, SNR, hull area, centroid</td>
+</tr>
+<tr>
+<td><code>cell_detections_vessel_analysis.json</code></td>
+<td>All detections enriched with <code>vessel_community_id</code>, <code>vessel_type</code>, <code>vessel_morphology</code>, <code>vessel_scale_um</code></td>
+</tr>
+<tr>
+<td><code>cell_detections_slim.json</code></td>
+<td>Lightweight JSON for viewer (coords + group fields, ~72MB vs 4GB)</td>
+</tr>
+<tr>
+<td><code>leiden/umap_leiden.png</code></td>
+<td>UMAP colored by Leiden cluster + marker profile</td>
+</tr>
+<tr>
+<td><code>leiden/spatial_leiden.png</code></td>
+<td>Spatial scatter colored by Leiden cluster</td>
+</tr>
+<tr>
+<td><code>leiden/cluster_composition.png</code></td>
+<td>Bar chart: marker composition per Leiden cluster</td>
+</tr>
+<tr>
+<td><code>leiden/vessel_adata.h5ad</code></td>
+<td>AnnData with features, embeddings, Leiden labels (for scanpy)</td>
+</tr>
+<tr>
+<td><code>squidpy/nhood_enrichment.png</code></td>
+<td>Do SMA+ cells preferentially neighbor CD31+ cells?</td>
+</tr>
+<tr>
+<td><code>squidpy/co_occurrence.png</code></td>
+<td>Distance-dependent co-occurrence of marker types</td>
+</tr>
+<tr>
+<td><code>squidpy/ripley_L.png</code></td>
+<td>Spatial clustering (L &gt; 0) or repulsion (L &lt; 0) per cell type</td>
+</tr>
+</tbody>
+</table>
+<h2 id="snr-vs-background-corrected-intensity">SNR vs Background-Corrected Intensity<a class="headerlink" href="#snr-vs-background-corrected-intensity" title="Permanent link">&para;</a></h2>
+<p>This workflow uses <strong>SNR (signal-to-noise ratio)</strong> throughout instead of background-corrected intensity:</p>
+<ul>
+<li><code>ch*_mean</code> (bg-corrected): clamps to 0 when background &gt; signal — most cells read 0.0</li>
+<li><code>ch*_snr = raw / background</code>: ratio, no clamping, scale-invariant</li>
+<li>SNR &gt; 1 means signal is above background; SNR = 0.5 means signal is half the background level</li>
+</ul>
+<p>The <code>classify_markers.py</code> script stores <code>{marker}_snr</code> for each cell, and <code>vessel_community_analysis.py</code> uses mean SNR per structure to distinguish artery-like (high SMA SNR) from vein-like (moderate SMA SNR) structures.</p>
+<h2 id="squidpy-integration">Squidpy Integration<a class="headerlink" href="#squidpy-integration" title="Permanent link">&para;</a></h2>
+<p>With <code>--run-squidpy</code>, the script builds an AnnData object from positive cells and runs:</p>
+<ul>
+<li><strong>Neighborhood enrichment</strong>: Tests whether cell types co-localize more than expected by chance</li>
+<li><strong>Co-occurrence</strong>: Distance-dependent co-occurrence patterns</li>
+<li><strong>Ripley's L</strong>: Tests for spatial clustering (L &gt; 0) or repulsion (L &lt; 0)</li>
+</ul>
+<p>The feature matrix uses SNR values (SMA_snr, CD31_snr) rather than raw intensities.</p>
+<h2 id="leiden-clustering">Leiden Clustering<a class="headerlink" href="#leiden-clustering" title="Permanent link">&para;</a></h2>
+<p>With <code>--run-leiden</code>, the script clusters <strong>all</strong> cells (not just positive) on the full feature space:</p>
+<ul>
+<li><strong>Features</strong>: morphological (area, perimeter, eccentricity, etc.) + channel SNR/raw/std/max/median + SAM2 embeddings = ~295 features</li>
+<li><strong>Workflow</strong>: scale → PCA (50 components) → KNN neighbors (k=15) → Leiden community detection</li>
+<li><strong>Resolution</strong>: <code>--leiden-resolution 0.5</code> (default). Higher = more fine-grained clusters.</li>
+<li><strong>Output</strong>: UMAP plot, spatial scatter, cluster composition bar chart, h5ad file</li>
+</ul>
+<p>This reveals data-driven cell subtypes beyond binary marker classification — e.g., distinguishing pericytes from smooth muscle, or different endothelial phenotypes. The <code>leiden_cluster</code> label is added to each detection's features and can be used as <code>--viewer-group-field leiden_cluster</code> in the spatial viewer.</p>
+<p><strong>Memory note</strong>: Leiden on 306K cells requires ~50-100GB RAM. Run as a SLURM job on p.hpcl8 (370G nodes), not on the login node.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.expand", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
