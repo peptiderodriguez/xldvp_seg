@@ -73,8 +73,14 @@ def build_parser():
     parser.add_argument(
         "--tile-overlap",
         type=float,
-        default=0.10,
-        help="Tile overlap fraction (0.0-0.5, default: 0.10 = 10%% overlap)",
+        default=0.15,
+        help=(
+            "Tile overlap fraction (0.0-0.5, default: 0.15 = 15%% overlap). "
+            "Bump to 0.25 for very large cells (MK ≥100 µm, multinucleated "
+            "hepatocytes) so they are fully contained in at least one tile's "
+            "overlap zone rather than bisected at tile edges. The default 0.15 "
+            "covers polyploid hepatocytes (octoploid ~80 µm)."
+        ),
     )
     parser.add_argument(
         "--sample-fraction",

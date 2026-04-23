@@ -94,7 +94,7 @@ Key flags:
 - `--marker-snr-channels "SMA:1,CD31:3"` — classify markers during detection at zero cost (SNR≥1.5). Replaces separate `classify_markers.py` step.
 - `--html-sample-fraction 0.10` — browser-friendly HTML viewer.
 - `--sample-fraction` is ALWAYS 1.0.
-- `--tile-overlap 0.25` — for large cells (MK ≥100 µm, multinucleated hepatocytes). Default 0.10 is smaller than MK diameter → cells bisected at tile edges, dedup keeps both partial detections with clipped contours. YAML key: `tile_overlap: 0.25`. Cross-tile merging exists only for vessel strategy today.
+- `--tile-overlap` — default **0.15** (77 µm overlap zones, fully contains cells up to ~155 µm). Bump to **0.25** for MK-scale cells (≥100 µm diameter) so they are fully contained in at least one tile's overlap zone rather than bisected at tile edges (dedup keeps both partial detections with clipped contours otherwise). YAML key: `tile_overlap: 0.25`. Cross-tile merging exists only for vessel strategy today.
 - RGB brightfield CZIs (H&E-style single packed-RGB channel) work end-to-end for MK (+ cell). Pipeline detects RGB via `loader.is_channel_rgb()`, allocates `(H, W, 3)` uint8 SHM, uses `modality='brightfield'` for tissue detection, skips fluorescence-specific preprocessing.
 
 YAML launch: `scripts/run_pipeline.sh configs/my_experiment.yaml` (see `examples/configs/`).

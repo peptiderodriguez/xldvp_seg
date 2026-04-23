@@ -239,7 +239,7 @@ Tiles are generated with configurable overlap:
 
 ```bash
 --tile-size 3000           # Tile dimensions in pixels (default: 3000)
---tile-overlap 0.10        # Overlap fraction between adjacent tiles (default: 10%)
+--tile-overlap 0.15        # Overlap fraction between adjacent tiles (default: 15%; 25% for MK-scale cells)
 ```
 
 ---

@@ -54,7 +54,7 @@ Key flags:
 | `--tissue-channels` | Marker channels identifying tissue regions to segment (e.g., `"2,3,5"`). Required for islet. Not for Cellpose segmentation (use `--channel-spec`). Legacy: `--islet-display-channels` |
 | `--max-cell-area` | Max cell area in µm² (default **2000**; covers polyploid hepatocytes, multinucleated giant cells). Raised from 200 in Apr 2026 — prior default silently dropped tetraploid/octoploid hepatocytes. |
 | `--min-cell-area` | Min cell area in µm² (default **50**) |
-| `--tile-overlap` | Overlap fraction between adjacent tiles (default **0.10**). Set **0.25** for large cells (MK ≥100 µm, multinucleated hepatocytes) — smaller overlap bisects large cells at tile edges. |
+| `--tile-overlap` | Overlap fraction between adjacent tiles (default **0.15**, covers polyploid hepatocytes up to ~155 µm). Bump to **0.25** for very large cells (MK ≥100 µm, multinucleated giant cells) — smaller overlap bisects large cells at tile edges. |
 | `--flat-field-cache-dir` | Shared preprocessing-cache dir (flat_field_profile.npz + tissue_filter.json). Default: cache sits in slide_output_dir. Set to a slide-level path to share caches across runs with different `--output-dir`. |
 | `--no-contour-processing` | Skip contour extraction from HDF5 masks |
 | `--no-background-correction` | Skip local background subtraction |

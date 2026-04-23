@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — baseline tile overlap raised 0.10 → 0.15 (Apr 23 2026)
+
+- **`--tile-overlap` default changed from `0.10` to `0.15`** (`xldvp_seg.pipeline.cli`). 15% of a 3000-px tile at 0.1722 µm/px is 77 µm on each side, which fully contains cells up to ~155 µm diameter — covering polyploid hepatocytes (octoploid ~80 µm) and most multinucleated cells without the silent edge-bisection artifact the 0.10 default had. MK-scale cells (≥100 µm diameter) still want the explicit `--tile-overlap 0.25` / `tile_overlap: 0.25` per the MK strategy guidance. Docs updated in `CLAUDE.md`, `docs/cli-reference.md`, `docs/GETTING_STARTED.md`, `.claude/commands/analyze.md`.
+
 ### Added — preprocessing cache generalization + shared primitives (Apr 23 2026, part 2)
 
 - **Tissue-filter cache** (`<cache_dir>/tissue_filter.json`). The calibration + per-tile tissue scan (~3-4 min per shard) is now cached alongside the flat-field profile. Benefits brightfield equally since tissue filtering runs for both modalities. Cache key: CZI identity (path/mtime/size) + scene + tile_size + tile_overlap + tissue_channel + modality + manual_threshold + n_all_tiles + algorithm_version. Atomic write via ``atomic_json_dump``. POSIX ``O_CREAT|O_EXCL`` advisory lock (``tissue_filter.computing``) serializes the first compute across concurrent shards so only one of N recomputes on cold start; the others poll then load. 3h stale-lock recovery matches flat-field. New module ``xldvp_seg.preprocessing.tissue_filter_cache``.
