@@ -595,6 +595,7 @@ def test_build_linked_viewer_html_smoke(tmp_path):
     Exercises the real signature (no skip-on-TypeError shim) so a future
     signature change fails loudly rather than silently skipping.
     """
+    pytest.importorskip("plotly")
     from xldvp_seg.visualization.manifold_viewer import build_linked_viewer_html
 
     rng = np.random.default_rng(0)

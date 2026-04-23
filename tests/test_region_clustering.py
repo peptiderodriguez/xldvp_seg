@@ -86,6 +86,7 @@ def test_elbow_returns_degenerate_on_tiny_input():
 
 
 def test_leiden_finds_two_blobs():
+    pytest.importorskip("igraph")
     X, y = _make_blobs(n_per_blob=60, centers=[[0, 0], [10, 10]], spread=0.4)
     labels = cluster_leiden(X, n_neighbors=10, resolution=1.0)
     # Leiden at default resolution often over-splits — but it should never
@@ -99,6 +100,7 @@ def test_leiden_finds_two_blobs():
 
 
 def test_leiden_handles_small_input():
+    pytest.importorskip("igraph")
     X, _ = _make_blobs(n_per_blob=8, centers=[[0, 0], [5, 5]])
     # n_neighbors internally capped at n-1
     labels = cluster_leiden(X, n_neighbors=30, resolution=1.0)
@@ -112,6 +114,7 @@ def test_leiden_handles_small_input():
 
 
 def test_hdbscan_separates_blobs_from_noise():
+    pytest.importorskip("hdbscan")
     X_blobs, _ = _make_blobs(n_per_blob=80, centers=[[0, 0], [15, 15]], spread=0.3)
     rng = np.random.default_rng(0)
     X_noise = rng.uniform(-30, 30, size=(40, 2))
@@ -124,6 +127,7 @@ def test_hdbscan_separates_blobs_from_noise():
 
 
 def test_hdbscan_respects_min_cluster_size_cap():
+    pytest.importorskip("hdbscan")
     # With n=20 and requested min_cluster_size=500, should cap at n//5 = 4, floor at 5
     X, _ = _make_blobs(n_per_blob=10, centers=[[0, 0], [5, 5]])
     labels = cluster_hdbscan(X, min_cluster_size=500)
@@ -295,6 +299,7 @@ def test_find_optimal_k_elbow_n_less_than_2():
 
 def test_cluster_leiden_single_point():
     """Single point: no edges -> Leiden should return shape (1,) with label 0."""
+    pytest.importorskip("igraph")
     X = np.array([[1.0, 2.0, 3.0]])
     labels = cluster_leiden(X, n_neighbors=15, resolution=1.0)
     assert labels.shape == (1,)
@@ -303,6 +308,7 @@ def test_cluster_leiden_single_point():
 
 def test_cluster_hdbscan_min_size_cap():
     """min_cluster_size=10000 with n=20 should internally cap to n//5 (=4) without crashing."""
+    pytest.importorskip("hdbscan")
     X, _ = _make_blobs(n_per_blob=10, centers=[[0, 0], [5, 5]])
     assert X.shape[0] == 20
     # Should not crash even with absurdly large min_cluster_size

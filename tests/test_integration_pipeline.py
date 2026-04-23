@@ -25,7 +25,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 CZI_PATH = Path(
-    "/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xDVP/"
+    "/fs/pool/pool-mann-axioscan/01_Users/EdRo_axioscan/xlDVP/"
     "20251114_Pdgfra546_Msln750_PM647_nuc488-EDFvar-1-stitch.czi"
 )
 PYTHON = sys.executable
