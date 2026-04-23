@@ -182,9 +182,18 @@ def setup_shared_memory(
         all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
 
     # Apply slide-wide preprocessing on SHM views (modifies data in-place).
-    # slide_output_dir was resolved up front so the flat-field cache can be
-    # shared across shards and ``--resume`` runs.
-    apply_slide_preprocessing(args, all_channel_data, loader, slide_output_dir=slide_output_dir)
+    # Flat-field cache dir defaults to slide_output_dir (co-located with the
+    # run, scoped to it + its --resume siblings). If --flat-field-cache-dir is
+    # set, prefer that so the cache can be shared across detection runs with
+    # different --output-dir (e.g. parameter sweeps on the same CZI).
+    flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
+    if flat_field_cache_dir:
+        flat_field_cache_dir = Path(flat_field_cache_dir)
+        flat_field_cache_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Flat-field cache: using shared dir {flat_field_cache_dir}")
+    else:
+        flat_field_cache_dir = slide_output_dir
+    apply_slide_preprocessing(args, all_channel_data, loader, slide_output_dir=flat_field_cache_dir)
 
     # Generate tile grid (using global coordinates)
     overlap = args.tile_overlap

@@ -137,6 +137,18 @@ def build_parser():
         help="Disable flat-field correction (use raw intensities)",
     )
     parser.add_argument(
+        "--flat-field-cache-dir",
+        default=None,
+        help=(
+            "Directory to read/write the shared flat-field illumination cache "
+            "(flat_field_profile.npz). Default: cache sits inside each run's "
+            "slide_output_dir so it's scoped to that run + its --resume siblings. "
+            "Pass a slide-level path (e.g. /path/to/caches/<slide_stem>/) to share "
+            "the cache across detection runs with different --output-dir so new "
+            "experiments on the same CZI skip the ~1-2h illumination rescan."
+        ),
+    )
+    parser.add_argument(
         "--html-normalization",
         choices=["tile", "crop"],
         default="tile",

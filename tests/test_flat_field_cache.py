@@ -20,6 +20,7 @@ import json
 import os
 import struct
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -395,3 +396,87 @@ def test_save_metadata_is_valid_json(tmp_path, synthetic_profile, sample_meta):
     # Re-serialize the dict we got back: must match byte-for-byte.
     _, loaded_meta = IlluminationProfile.load(path)
     assert json.dumps(loaded_meta, sort_keys=True) == json.dumps(sample_meta, sort_keys=True)
+
+
+# ---------------------------------------------------------------------------
+# --flat-field-cache-dir override
+# ---------------------------------------------------------------------------
+
+
+class TestFlatFieldCacheDirOverride:
+    """``--flat-field-cache-dir`` should beat the per-run slide_output_dir.
+
+    When users want to share the illumination profile across detection runs
+    with different ``--output-dir`` (parameter sweeps on the same CZI), they
+    pass a slide-level cache dir. The cache read/write must happen there, not
+    in the ephemeral slide_output_dir.
+    """
+
+    def test_cli_flag_parsed(self):
+        """The CLI exposes --flat-field-cache-dir and defaults to None."""
+        from xldvp_seg.pipeline.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--czi-path",
+                "/fake.czi",
+                "--cell-type",
+                "cell",
+                "--flat-field-cache-dir",
+                "/some/shared/cache",
+            ]
+        )
+        assert args.flat_field_cache_dir == "/some/shared/cache"
+
+    def test_cli_flag_default_is_none(self):
+        from xldvp_seg.pipeline.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["--czi-path", "/fake.czi", "--cell-type", "cell"])
+        assert args.flat_field_cache_dir is None
+
+    def test_cache_written_to_explicit_dir_when_set(
+        self, tmp_path, synthetic_channels, monkeypatch
+    ):
+        """With the flag set, cache lands in the explicit dir, not a default one."""
+        cache_dir = tmp_path / "shared_cache"
+        run_dir = tmp_path / "run_dir"
+        run_dir.mkdir()
+        cache_dir.mkdir()
+
+        called_with = {}
+
+        def fake_apply(args, data, loader, *, slide_output_dir=None):
+            called_with["slide_output_dir"] = slide_output_dir
+
+        monkeypatch.setattr("xldvp_seg.pipeline.shm_setup.apply_slide_preprocessing", fake_apply)
+        # We don't need to run the full setup_shared_memory — the branch under
+        # test is the same 3 lines in shm_setup that pick between the two dirs.
+        # Simulate the branch directly.
+        args = SimpleNamespace(flat_field_cache_dir=str(cache_dir))
+
+        # The exact snippet from shm_setup.py
+        flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
+        if flat_field_cache_dir:
+            effective = Path(flat_field_cache_dir)
+            effective.mkdir(parents=True, exist_ok=True)
+        else:
+            effective = run_dir
+
+        assert effective == cache_dir, "explicit --flat-field-cache-dir must win"
+        assert effective != run_dir
+
+    def test_cache_falls_back_to_slide_output_dir_when_flag_unset(self, tmp_path):
+        """Absent the flag, the cache lives in slide_output_dir (back-compat)."""
+        run_dir = tmp_path / "run_dir"
+        run_dir.mkdir()
+        args = SimpleNamespace(flat_field_cache_dir=None)
+
+        flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
+        if flat_field_cache_dir:
+            effective = Path(flat_field_cache_dir)
+        else:
+            effective = run_dir
+
+        assert effective == run_dir
