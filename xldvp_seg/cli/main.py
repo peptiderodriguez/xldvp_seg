@@ -101,6 +101,10 @@ def _run_manifold_sample(remaining):
     _run_script("scripts/manifold_sample.py", remaining)
 
 
+def _run_ms_queue(remaining):
+    _run_script("scripts/build_ms_queue.py", remaining)
+
+
 def _run_download_models(remaining):
     """Download model checkpoints."""
     import argparse as _ap
@@ -159,6 +163,7 @@ _DISPATCH = {
     "qc": _run_qc,
     "discover-rare-cells": _run_discover_rare_cells,
     "manifold-sample": _run_manifold_sample,
+    "ms-queue": _run_ms_queue,
 }
 
 
@@ -204,6 +209,10 @@ def cli():
     subparsers.add_parser(
         "manifold-sample",
         help="Manifold-spanning LMD replicate pool builder (FPS + Ward)",
+    )
+    subparsers.add_parser(
+        "ms-queue",
+        help="Build Thermo MS queue CSV from LMD replicates",
     )
 
     args, remaining = parser.parse_known_args()

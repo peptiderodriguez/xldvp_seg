@@ -503,22 +503,24 @@ def assign_wells_with_controls(
     well_idx = 0
 
     # Singles: Target -> Control -> Target -> Control ...
+    # generate_plate_wells already raised ConfigError if n_wells > 308, so the
+    # `overflow_{idx}` fallback here was unreachable — removed.
     for single, ctrl in zip(ordered_singles, ordered_single_ctrls):
-        single["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        single["well"] = wells[well_idx]
         assignments.append(single)
         well_idx += 1
 
-        ctrl["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        ctrl["well"] = wells[well_idx]
         assignments.append(ctrl)
         well_idx += 1
 
     # Clusters: Cluster -> Control -> Cluster -> Control ...
     for cluster, ctrl in zip(ordered_clusters, ordered_cluster_ctrls):
-        cluster["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        cluster["well"] = wells[well_idx]
         assignments.append(cluster)
         well_idx += 1
 
-        ctrl["well"] = wells[well_idx] if well_idx < len(wells) else f"overflow_{well_idx}"
+        ctrl["well"] = wells[well_idx]
         assignments.append(ctrl)
         well_idx += 1
 

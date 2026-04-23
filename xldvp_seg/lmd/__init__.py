@@ -19,6 +19,7 @@ __all__ = [
     "clustering",
     "contour_processing",
     "export",
+    "ms_queue",
     "selection",
     "well_plate",
 ]

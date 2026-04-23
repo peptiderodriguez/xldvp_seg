@@ -21,19 +21,19 @@ from xldvp_seg.exceptions import ConfigError
 
 WELLS_PER_PLATE = 308  # 4 quadrants × 77 wells
 
-_EVEN_ROWS = ["B", "D", "F", "H", "J", "L", "N"]
-_ODD_ROWS = ["C", "E", "G", "I", "K", "M", "O"]
-_EVEN_COLS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
-_ODD_COLS = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
+EVEN_ROWS = ["B", "D", "F", "H", "J", "L", "N"]
+ODD_ROWS = ["C", "E", "G", "I", "K", "M", "O"]
+EVEN_COLS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
+ODD_COLS = [3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23]
 
-_QUAD_MAP = {
-    "B2": (_EVEN_ROWS, _EVEN_COLS),
-    "B3": (_EVEN_ROWS, _ODD_COLS),
-    "C2": (_ODD_ROWS, _EVEN_COLS),
-    "C3": (_ODD_ROWS, _ODD_COLS),
+QUAD_MAP = {
+    "B2": (EVEN_ROWS, EVEN_COLS),
+    "B3": (EVEN_ROWS, ODD_COLS),
+    "C2": (ODD_ROWS, EVEN_COLS),
+    "C3": (ODD_ROWS, ODD_COLS),
 }
 
-_QUADRANT_ORDER = ["B2", "B3", "C3", "C2"]
+QUADRANT_ORDER = ["B2", "B3", "C3", "C2"]
 
 
 def generate_quadrant_serpentine(quadrant, start_corner="TL"):
@@ -51,9 +51,9 @@ def generate_quadrant_serpentine(quadrant, start_corner="TL"):
     list[str]
         77 well addresses in serpentine order (e.g. ['B2', 'B4', ..., 'N22']).
     """
-    if quadrant not in _QUAD_MAP:
+    if quadrant not in QUAD_MAP:
         raise ConfigError(f"Unknown quadrant: {quadrant}")
-    rows, cols = _QUAD_MAP[quadrant]
+    rows, cols = QUAD_MAP[quadrant]
 
     if start_corner == "TL":
         row_order = rows
@@ -131,8 +131,8 @@ def generate_plate_wells(n_wells, start_quadrant="B2"):
             f"Use generate_multiplate_wells() for overflow."
         )
 
-    idx = _QUADRANT_ORDER.index(start_quadrant)
-    order = _QUADRANT_ORDER[idx:] + _QUADRANT_ORDER[:idx]
+    idx = QUADRANT_ORDER.index(start_quadrant)
+    order = QUADRANT_ORDER[idx:] + QUADRANT_ORDER[:idx]
 
     all_wells = []
     for i, quad in enumerate(order):
