@@ -227,6 +227,7 @@ class TestCLIDispatchTable:
             "qc",
             "discover-rare-cells",
             "manifold-sample",
+            "ms-queue",
         }
         assert set(_DISPATCH.keys()) == expected
 

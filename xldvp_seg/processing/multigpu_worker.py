@@ -503,14 +503,28 @@ def _gpu_worker(
                         try:
                             import h5py
 
+                            from xldvp_seg.io.html_export import create_hdf5_dataset
+
                             tile_id = f"tile_{tile['x']}_{tile['y']}"
                             tile_out = Path(tiles_dir) / tile_id
                             tile_out.mkdir(exist_ok=True)
                             masks_file = tile_out / f"{cell_type}_masks.h5"
-                            with h5py.File(masks_file, "w") as f:
-                                from xldvp_seg.io.html_export import create_hdf5_dataset
-
-                                create_hdf5_dataset(f, "masks", masks)
+                            masks_tmp = tile_out / f"{cell_type}_masks.h5.tmp"
+                            # Atomic write: two workers racing on the same tile
+                            # (resume + shard retry) could otherwise open h5py
+                            # concurrently in "w" mode and corrupt the file —
+                            # HDF5 is not concurrent-writer safe. tmp + os.replace
+                            # is atomic on POSIX same-filesystem renames.
+                            try:
+                                with h5py.File(masks_tmp, "w") as f:
+                                    create_hdf5_dataset(f, "masks", masks)
+                                os.replace(masks_tmp, masks_file)
+                            except BaseException:
+                                try:
+                                    masks_tmp.unlink()
+                                except OSError:
+                                    pass
+                                raise
                             out["masks"] = None  # saved to disk, don't send through Queue
                         except Exception as e:
                             logger.warning(

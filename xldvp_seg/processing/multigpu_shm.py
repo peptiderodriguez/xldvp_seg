@@ -78,16 +78,28 @@ def _cleanup_shared_memory_on_exit():
 atexit.register(_cleanup_shared_memory_on_exit)
 
 
-# Register cleanup on SIGTERM (e.g., SLURM job cancellation, timeout)
+# Cleanup on SIGTERM (e.g., SLURM job cancellation, timeout) — install only
+# when SharedSlideManager is instantiated. Phase 4c fix: previously this
+# was installed at module import time on MainProcess, which hijacked
+# Ctrl-C behavior for every `xlseg info`, `xlseg system`, `xlseg strategies`
+# call (none of which need SHM cleanup).
+_signal_handlers_installed = False
+
+
 def _signal_cleanup(signum, frame):
     """Clean up shared memory on SIGTERM/SIGINT before exiting."""
     _cleanup_shared_memory_on_exit()
     raise SystemExit(128 + signum)
 
 
-if multiprocessing.current_process().name == "MainProcess":
-    signal.signal(signal.SIGTERM, _signal_cleanup)
-    signal.signal(signal.SIGINT, _signal_cleanup)
+def _ensure_signal_handlers_installed():
+    global _signal_handlers_installed
+    if _signal_handlers_installed:
+        return
+    if multiprocessing.current_process().name == "MainProcess":
+        signal.signal(signal.SIGTERM, _signal_cleanup)
+        signal.signal(signal.SIGINT, _signal_cleanup)
+        _signal_handlers_installed = True
 
 
 def register_shm_for_cleanup(name: str):
@@ -111,6 +123,10 @@ class SharedSlideManager:
     def __init__(self):
         self.shared_memories: dict[str, SharedMemory] = {}
         self.slide_info: dict[str, dict[str, Any]] = {}
+        # Install SIGINT/SIGTERM handlers lazily — only when SHM is actually
+        # in use. Read-only CLI subcommands (info, system, strategies) never
+        # reach here and keep the default Ctrl-C → KeyboardInterrupt.
+        _ensure_signal_handlers_installed()
 
     def add_slide(self, name: str, data: np.ndarray) -> dict[str, Any]:
         """

@@ -161,8 +161,20 @@ def _build_kwargs_mesothelium(
     **_ignored,
 ) -> dict[str, Any]:
     """Build constructor kwargs for MesotheliumStrategy."""
+    # Phase 4c: refuse to default pixel_size_um. "Never hardcode pixel sizes"
+    # is a load-bearing rule; silently falling back to 0.22 µm/px misreports
+    # ribbon widths + fragment areas by an unknown factor.
+    from xldvp_seg.exceptions import ConfigError
+
+    # E.2: explicit None check so 0.0 (nonsense anyway) doesn't fall through
+    ps = pixel_size_um if pixel_size_um is not None else strategy_params.get("pixel_size_um")
+    if ps is None:
+        raise ConfigError(
+            "mesothelium strategy requires pixel_size_um (from CZI metadata "
+            "or strategy_params['pixel_size_um']); no safe default."
+        )
     kwargs = dict(
-        pixel_size_um=pixel_size_um or strategy_params.get("pixel_size_um", 0.22),
+        pixel_size_um=ps,
         target_chunk_area_um2=strategy_params.get("target_chunk_area_um2", 1500.0),
         min_ribbon_width_um=strategy_params.get("min_ribbon_width_um", 5.0),
         max_ribbon_width_um=strategy_params.get("max_ribbon_width_um", 30.0),

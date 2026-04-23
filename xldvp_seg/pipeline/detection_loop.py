@@ -589,10 +589,28 @@ def _run_regular_tiles(processor, args, ctx, init, sampled_tiles, all_samples_re
                 f"processing {len(remaining)} remaining"
             )
             tiles_to_process = remaining
+            # Reload completed-tile detections from disk BEFORE the submission
+            # loop so that newly-processed tiles append to the right list.
+            # Without this, partial resumes silently drop the completed subset
+            # from dedup + finalize (Phase 1.2 fix).
+            all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
+            logger.info(
+                f"Reloaded {len(all_detections)} detections from {completed} " f"completed tile(s)"
+            )
+            # Vessel partial-resume caveat: `collected_partial_vessels` is not
+            # persisted per-tile today, so cross-tile merge will miss vessels
+            # spanning a completed/remaining tile boundary. Warn loudly.
+            if remaining and args.cell_type == "vessel":
+                logger.warning(
+                    "VESSEL PARTIAL RESUME: cross-tile merge state from already-"
+                    "completed tiles is not persisted on disk yet. Merged vessels "
+                    "that span a completed<->remaining tile boundary will be "
+                    "missed. For a fully correct run, consider re-processing from "
+                    "scratch (delete tiles_dir) or ensure no vessel straddles that "
+                    "boundary."
+                )
         if not remaining:
             logger.info("All tiles already completed — skipping to dedup")
-            # Reload from tiles instead of re-processing
-            all_detections = reload_detections_from_tiles(tiles_dir, args.cell_type)
 
     # Submit tiles (add tile dimensions for worker)
     logger.info(f"Submitting {len(tiles_to_process)} tiles to {num_gpus} GPUs...")
@@ -921,14 +939,22 @@ def _postprocess_detections(
                 feat["center"] = [cx, cy]
                 feat["is_cross_tile_merged"] = True
                 feat["merge_score"] = mv.get("merge_score", 0)
+                # Merged vessels have no HDF5 mask in any single tile dir.
+                # Set contours here (outer is already in global pixel coords)
+                # and mark skip_postdedup so post_detection.by_tile does not
+                # try to read a mask for them (Phase 1.7 fix).
+                contour_list = pts.tolist()
                 det = {
                     "uid": uid,
                     "slide_name": slide_name,
                     "global_center": [cx, cy],
                     "global_center_um": [cx * pixel_size_um, cy * pixel_size_um],
+                    "contour_px": contour_list,
+                    "contour_um": (pts * pixel_size_um).tolist(),
                     "features": feat,
                     "tile_origin": list(mv.get("source_tiles", [(0, 0)])[0]),
                     "is_cross_tile_merged": True,
+                    "skip_postdedup": True,
                 }
                 all_detections.append(det)
             logger.info(f"Total detections after cross-tile merge: {len(all_detections)}")

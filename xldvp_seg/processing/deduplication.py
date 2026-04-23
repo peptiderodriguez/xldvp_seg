@@ -34,7 +34,7 @@ except ImportError:
     pass
 import h5py
 
-from xldvp_seg.exceptions import ConfigError
+from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.utils.logging import get_logger
 
 try:
@@ -123,6 +123,7 @@ def deduplicate_by_mask_overlap(
     # mosaics wider than 1M pixels.
     det_info_raw = []  # List of (det, global_bbox, global_xs, global_ys) or (det, None, None, None)
     observed_max_x = 0  # Track actual max x coordinate across all detections
+    observed_max_y = 0  # Track actual max y for int64 overflow guard (Phase 4c)
     n_maskless = 0  # Count detections without valid mask data
 
     # Cache: tile_id -> (masks_array, find_objects_slices)
@@ -223,6 +224,7 @@ def deduplicate_by_mask_overlap(
 
         # Track max x for dynamic stride computation
         observed_max_x = max(observed_max_x, int(global_xs.max()))
+        observed_max_y = max(observed_max_y, int(global_ys.max()))
 
         det_info_raw.append((det, bbox, global_xs, global_ys))
 
@@ -259,6 +261,17 @@ def deduplicate_by_mask_overlap(
     coord_stride = max(observed_max_x + 1, _COORD_STRIDE_DEFAULT)
     if coord_stride > _COORD_STRIDE_DEFAULT:
         logger.info(f"Coordinate stride increased to {coord_stride} (max x={observed_max_x})")
+    # Phase 4c / E.1: slide-size sanity check. The actual frozenset tuple
+    # encoding uses Python ints (arbitrary precision), so there's no numeric
+    # overflow risk. This guard exists to refuse absurdly large slides where
+    # the frozenset hash table would be pathologically slow, and to flag
+    # that IoU NMS is the better dedup choice for such inputs.
+    if observed_max_y * coord_stride >= 2**63:
+        raise DetectionError(
+            f"Slide too large for tuple-encoded dedup: observed_max_y="
+            f"{observed_max_y}, coord_stride={coord_stride}. Use "
+            f"--dedup-method iou_nms for large slides."
+        )
 
     # --- Fix 2 (part 1): Encode coordinates as tuples for set-based overlap ---
     # We encode (x, y) pairs as single int64 values using coord_stride, then

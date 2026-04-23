@@ -175,9 +175,11 @@ class OmicLinker:
     def link(self) -> pd.DataFrame:
         """Join morphological features to proteomics by well.
 
-        Aggregates per-cell features to well level (mean of numeric features),
-        adds pool spatial metadata (centroid, spread, cell count), then joins
-        with well-level proteomics.
+        Aggregates per-cell features to well level (**median** of scalar
+        features for outlier-robust pooling; **mean** of embedding columns to
+        preserve the centroid in representation space), adds pool spatial
+        metadata (centroid, spread, cell count), then joins with well-level
+        proteomics.
 
         Pool spatial columns added:
             - ``pool_x_um``, ``pool_y_um``: centroid of pooled cells (mean position)
@@ -446,7 +448,10 @@ class OmicLinker:
         else:
             pval_df = None
 
-        # Slow path: per-pair with NaN handling + pre-filter on |r| > 0.2
+        # Slow path: per-pair with NaN handling + pre-filter on |r| > 0.2.
+        # Track whether the prefilter wrote synthetic 1.0 sentinels — the FDR
+        # step below must then exclude those to avoid inflating BH's m.
+        slow_path_prefiltered = False
         if pval_df is None:
             pval_df = pd.DataFrame(index=morph_features, columns=proteins, dtype=float)
             for mf in morph_features:
@@ -454,6 +459,7 @@ class OmicLinker:
                     # Skip weak correlations — p-value is meaningless
                     if abs(corr_df.loc[mf, prot]) < 0.2:
                         pval_df.loc[mf, prot] = 1.0
+                        slow_path_prefiltered = True
                         continue
                     vals = self._linked[[mf, prot]].dropna()
                     if len(vals) < 5:
@@ -465,11 +471,20 @@ class OmicLinker:
         if fdr_correct:
             from statsmodels.stats.multitest import multipletests
 
+            # BH correction must run on the actually-tested subset only.
+            # In the slow path, the |r|<0.2 prefilter wrote synthetic 1.0s
+            # that should NOT feed multipletests (inflates m). In the fast
+            # (Spearman) path, all non-NaN cells carry real p-values —
+            # exclude none based on correlation strength.
             pvals_flat = pval_df.values.flatten().astype(float)
-            valid = ~np.isnan(pvals_flat)
-            if valid.sum() > 0:
-                _, adjusted, _, _ = multipletests(pvals_flat[valid], method="fdr_bh")
-                pvals_flat[valid] = adjusted
+            if slow_path_prefiltered:
+                corr_flat = np.abs(corr_df.values.flatten().astype(float))
+                tested = (~np.isnan(pvals_flat)) & (corr_flat >= 0.2)
+            else:
+                tested = ~np.isnan(pvals_flat)
+            if tested.sum() > 0:
+                _, adjusted, _, _ = multipletests(pvals_flat[tested], method="fdr_bh")
+                pvals_flat[tested] = adjusted
                 pval_df = pd.DataFrame(
                     pvals_flat.reshape(pval_df.shape),
                     index=pval_df.index,

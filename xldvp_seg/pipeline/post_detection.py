@@ -843,8 +843,13 @@ def process_detections_post_dedup(
         det["_postdedup_idx"] = i
 
     # --- Group detections by tile ---
+    # Merged cross-tile vessels (skip_postdedup=True) have no HDF5 mask in any
+    # single tile dir; their contours are set at merge time in detection_loop.
+    # Exclude them from Phase 1/3 tile-mask reads (Phase 1.7 fix).
     by_tile: dict[str, list[dict]] = {}
     for det in detections:
+        if det.get("skip_postdedup"):
+            continue
         origin = det.get("tile_origin", [0, 0])
         key = f"{origin[0]}_{origin[1]}"
         by_tile.setdefault(key, []).append(det)
@@ -974,36 +979,54 @@ def process_detections_post_dedup(
         logger.info("-" * 40)
         logger.info("Phase 2: Background estimation (k=%d)", bg_neighbors)
 
-        centroids = _extract_centroids(detections)
-
-        # Discover which channels have data
-        bg_channels: set[int] = set()
-        for det in detections:
-            bg_channels.update(det.get("_bg_quick_medians", {}).keys())
-        bg_channels_sorted = sorted(bg_channels)
-
-        # Build the KD-tree once and reuse across all channels
-        _cached_tree_and_indices = None
-
-        for ch in bg_channels_sorted:
-            values = np.array(
-                [d.get("_bg_quick_medians", {}).get(ch, 0.0) for d in detections],
-                dtype=np.float64,
-            )
-            _, ch_bg, _cached_tree_and_indices = local_background_subtract(
-                values,
-                centroids,
-                bg_neighbors,
-                tree_and_indices=_cached_tree_and_indices,
+        # Phase B.1 fix: exclude detections flagged skip_postdedup (cross-tile
+        # merged vessels). They have no `_bg_quick_medians` — including them
+        # would read 0.0 via .get() default and contaminate neighbor medians
+        # for other cells. Merged vessels simply don't get a per_cell_bg
+        # entry; Phase 3 is already skipped for them.
+        non_merged_idx = [i for i, d in enumerate(detections) if not d.get("skip_postdedup")]
+        n_skipped = len(detections) - len(non_merged_idx)
+        if n_skipped:
+            logger.info(
+                "  Phase 2: excluding %d skip_postdedup detection(s) from bg estimation",
+                n_skipped,
             )
 
-            for i in range(len(detections)):
-                per_cell_bg.setdefault(i, {})[ch] = float(ch_bg[i])
+        if not non_merged_idx:
+            logger.info("  No detections eligible for bg correction; skipping Phase 2")
+        else:
+            non_merged_dets = [detections[i] for i in non_merged_idx]
+            centroids = _extract_centroids(non_merged_dets)
 
-            median_bg = float(np.median(ch_bg))
-            logger.info("  ch%d: median bg=%.1f", ch, median_bg)
+            # Discover which channels have data
+            bg_channels: set[int] = set()
+            for det in non_merged_dets:
+                bg_channels.update(det.get("_bg_quick_medians", {}).keys())
+            bg_channels_sorted = sorted(bg_channels)
 
-        logger.info("  Phase 2 complete: %d channels estimated", len(bg_channels_sorted))
+            # Build the KD-tree once and reuse across all channels
+            _cached_tree_and_indices = None
+
+            for ch in bg_channels_sorted:
+                values = np.array(
+                    [d.get("_bg_quick_medians", {}).get(ch, 0.0) for d in non_merged_dets],
+                    dtype=np.float64,
+                )
+                _, ch_bg, _cached_tree_and_indices = local_background_subtract(
+                    values,
+                    centroids,
+                    bg_neighbors,
+                    tree_and_indices=_cached_tree_and_indices,
+                )
+
+                # Map ch_bg back to original detection indices.
+                for j, orig_i in enumerate(non_merged_idx):
+                    per_cell_bg.setdefault(orig_i, {})[ch] = float(ch_bg[j])
+
+                median_bg = float(np.median(ch_bg))
+                logger.info("  ch%d: median bg=%.1f", ch, median_bg)
+
+            logger.info("  Phase 2 complete: %d channels estimated", len(bg_channels_sorted))
     else:
         logger.info("Phase 2: Background correction disabled or no data source — skipping")
 
