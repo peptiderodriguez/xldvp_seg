@@ -118,6 +118,9 @@ CZI Image (20-180 GB)
     |
     v
 [LMD Export] ----------- Contours -> clusters -> controls -> 384-well plate -> XML
+    |
+    v
+[MS Queue] ------------- 384-well -> 96-well box -> Thermo Xcalibur CSV + sample key
 ```
 
 ---
@@ -185,6 +188,9 @@ Three corrections can be applied before segmentation:
 | `--norm-params-file params.json` | Reinhard LAB-space normalization for cross-slide intensity harmonization (pre-computed with `examples/legacy/compute_normalization_params.py`) |
 | `--normalize-features` (default ON) | Flat-field illumination correction per-channel (morphological background subtraction) |
 | `--no-normalize-features` | Disable flat-field correction; use raw intensities |
+| `--flat-field-cache-dir <path>` | Share `flat_field_profile.npz` + `tissue_filter.json` across runs with different `--output-dir` (default: caches sit in each run's output dir, auto-created on first run) |
+
+The flat-field profile (~1-2h on 5-channel whole-mouse slides) and the tissue-filter result (~3-4 min) are cached per-slide automatically. Reruns, `--resume`, and `--tile-shard` workers skip recompute. Cache keys include CZI identity + scene + relevant params — any change invalidates safely. See [CLI Reference](cli-reference.md#xlseg-detect) for details.
 
 ```bash
 # Compute cross-slide normalization params (run once across all slides)

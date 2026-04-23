@@ -52,8 +52,21 @@ Key flags:
 | `--resume` | Resume from a previous run directory |
 | `--marker-snr-channels` | Auto-classify markers during detection using pre-computed SNR >= 1.5 (format: `"SMA:1,CD31:3"`) |
 | `--tissue-channels` | Marker channels identifying tissue regions to segment (e.g., `"2,3,5"`). Required for islet. Not for Cellpose segmentation (use `--channel-spec`). Legacy: `--islet-display-channels` |
+| `--max-cell-area` | Max cell area in µm² (default **2000**; covers polyploid hepatocytes, multinucleated giant cells). Raised from 200 in Apr 2026 — prior default silently dropped tetraploid/octoploid hepatocytes. |
+| `--min-cell-area` | Min cell area in µm² (default **50**) |
+| `--tile-overlap` | Overlap fraction between adjacent tiles (default **0.10**). Set **0.25** for large cells (MK ≥100 µm, multinucleated hepatocytes) — smaller overlap bisects large cells at tile edges. |
+| `--flat-field-cache-dir` | Shared preprocessing-cache dir (flat_field_profile.npz + tissue_filter.json). Default: cache sits in slide_output_dir. Set to a slide-level path to share caches across runs with different `--output-dir`. |
 | `--no-contour-processing` | Skip contour extraction from HDF5 masks |
 | `--no-background-correction` | Skip local background subtraction |
+
+**Preprocessing caches** (auto, no opt-in): on first run the pipeline writes two per-slide caches and reuses them on `--resume`, `--tile-shard` workers, and parameter sweeps that share `--flat-field-cache-dir`.
+
+| Cache | What | Recompute cost saved | Scope |
+|-------|------|---------------------|-------|
+| `flat_field_profile.npz` | Slide-wide illumination estimate | ~1-2h on 5-channel whole-mouse | Fluorescence only |
+| `tissue_filter.json` | `(variance_threshold, tissue_tiles)` | ~3-4 min per run | Fluorescence + brightfield |
+
+Cache keys include CZI `(path, mtime, size) + scene + algorithm-specific fields + algorithm_version`. Any change invalidates. `O_CREAT|O_EXCL` advisory locks (`flat_field_profile.computing`, `tissue_filter.computing`) ensure exactly one shard on cold start recomputes — others poll and load. 3h stale-lock recovery handles crashed computes.
 
 ---
 
@@ -160,6 +173,36 @@ xlseg export-lmd \
 | `--max-area-change-pct` | Adaptive RDP simplification tolerance (default 10%) |
 | `--max-dilation-area-pct` | Adaptive dilation for laser buffer (default 10%) |
 | `--generate-controls` | Add control wells |
+
+---
+
+### `xlseg ms-queue`
+
+Build Thermo Xcalibur MS queue CSVs from an LMD replicate manifest. Repacks
+384-well quadrants (B2, B3, C2, C3) into 96-well autosampler boxes (A1–G11),
+emits one queue CSV per box, and writes a sample-key sidecar (`_key.csv` +
+`_key.json`) joining each raw `File Name` back to full sample metadata for
+downstream analysis.
+
+```bash
+xlseg ms-queue \
+    --samples    path/to/mk_replicates.csv \
+    --config     path/to/ms_queue.yaml \
+    --output-dir path/to/ms_queues/ \
+    --combined
+```
+
+| Flag | Description |
+|------|-------------|
+| `--samples` | Input replicates CSV (must have `well` and optionally `plate` column) |
+| `--config` | YAML with `file_name_template`, `autosampler_slots`, and optional `ms_method` / `empty_marker` / shuffle / bracket_type |
+| `--well-col` | 384-well address column (default `well`) |
+| `--plate-col` | Plate column for multi-plate inputs (default `plate`; pass empty for single-plate) |
+| `--combined` | Additionally write `ms_queue_combined.csv` — per-box files are always written |
+| `--out-prefix` | Filename prefix (default `ms_queue`) |
+
+See [LMD Export Guide — Mass Spec Queue](LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur)
+for the full YAML schema, 384→96 mapping, and behavior notes.
 
 ---
 

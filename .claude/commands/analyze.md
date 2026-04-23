@@ -185,7 +185,8 @@ This replaces manual `--channel`, `--cellpose-input-channels`, and `--marker-cha
   - *Why always 100%?* Detection is checkpointed per-tile, classifier applied post-hoc — you never re-detect. Subsample HTML viewer with `html_sample_fraction: 0.10`.
 - **Preprocessing:** flat-field ON by default (`--no-normalize-features` to disable). `--photobleaching-correction` is EXPERIMENTAL — do NOT suggest.
   - *Why flat-field on?* Tiled mosaics have uneven illumination (bright center, dark edges). Corrects false intensity gradients across the slide.
-- **Area filters:** `--min-cell-area`, `--max-cell-area` (µm²) cut debris and giant artifacts when cell type has a known size range.
+  - *Preprocessing caches* (`flat_field_profile.npz`, `tissue_filter.json`) write automatically to `slide_output_dir/`. Reruns, `--resume`, and `--tile-shard` workers skip the ~1-2h flat-field rescan + ~3-4 min tissue filter. Set `--flat-field-cache-dir <path>` to share caches across runs with different `--output-dir` (parameter sweeps on the same CZI).
+- **Area filters:** `--min-cell-area 50` / `--max-cell-area 2000` (µm², defaults). The **2000 µm² default** covers polyploid hepatocytes (tetraploid ~400, octoploid ~800) and multinucleated giant cells — raised from 200 in Apr 2026 after silent drops on whole-mouse hepatocytes. Lower/raise only if your cell type's size range is tightly known.
 - **Segmenter:** `--segmenter {cellpose,instanseg}` (default cellpose). InstanSeg is a lightweight 3.8M-param alternative; requires `pip install -e .[instanseg]`.
 - **Dedup:** `--dedup-method mask_overlap` (default, pixel-exact) or `iou_nms` (Shapely STRtree, faster with >100K detections). `--iou-threshold 0.2` for IoU.
   - Note: IoU and overlap-fraction are different metrics — IoU may miss size-mismatched overlaps. Benchmark before switching default.
@@ -1051,6 +1052,36 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/sliding_window_sampling.py \
     --radius 70 --overlap 0.4 --target-multiplier 20
 ```
 Output filenames include timestamps so successive runs don't overwrite.
+
+**Step 28c — MS queue (Thermo Xcalibur).** After LMD cuts samples into the 384-well plate, repack the replicate manifest into per-box 96-well queue CSVs for the MS autosampler. Each 384 quadrant (B2, B3, C2, C3) maps 1:1 to a 96-well box (A1–G11).
+
+**Ask the user via AskUserQuestion** whether to build the MS queue now. If yes:
+
+1. Confirm inputs — replicate CSV (from Step 28), autosampler slot for each quadrant present, whether an Xcalibur method path is known. Method defaults to empty (operator fills in before Xcalibur); if a path is provided, it's Windows-formatted automatically (slashes → backslashes, unix prefixes warned).
+2. Draft a YAML config (`ms_queue.yaml`):
+```yaml
+file_name_template: "{date}_OA1_<prefix>_{slide}_{bone}_rep{replicate}_{well_384}_{well_96}"
+autosampler_slots: {B2: 2, B3: 3}
+ms_method: null                  # or "C:\\Xcalibur\\methods\\..."
+path: "D:\\"
+empty_marker: {column: slide, value: EMPTY}
+shuffle: true
+shuffle_seed: 42
+```
+   Template fields: every input CSV column + `{date}`, `{well_384}`, `{well_96}`, `{quadrant}`, `{box}`, `{plate}`. The rendered `File Name` becomes the raw MS file name — include enough fields (slide/bone/replicate/well) that rows are uniquely identifiable at a glance.
+3. Run:
+```bash
+xlseg ms-queue \
+    --samples <output>/lmd/replicates.csv \
+    --config  ms_queue.yaml \
+    --output-dir <output>/ms_queues/ --combined
+```
+4. Outputs:
+   - `ms_queue_<quadrant>.csv` (one per filled quadrant, or `ms_queue_plate{N}_<quadrant>.csv` for multi-plate). Header `Bracket Type=4`, columns `File Name, Path, Instrument Method, Position`.
+   - `ms_queue_combined.csv` (with `--combined`) — all boxes in one file.
+   - **`ms_queue_key.csv` + `ms_queue_key.json`** (always) — the authoritative join table. `File Name` column 1, followed by every input metadata column and the derived `quadrant/well_96/slot/Position/box_key/box_row_index/is_empty/instrument_method/queue_date`. Use this to link DIA-NN / Spectronaut output back to morphology for `OmicLinker` (Step 30).
+
+**Key behaviors:** BLANK rows (empty wells per `empty_marker`) are kept for carryover QC; shuffle is deterministic per `(plate, quadrant)`; duplicate rendered File Names raise `ConfigError` (Xcalibur would overwrite silently otherwise). See `docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur` for full schema and the Python API with rule-based per-row method selection.
 
 ---
 

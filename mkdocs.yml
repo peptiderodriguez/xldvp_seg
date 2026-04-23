@@ -60,6 +60,7 @@ nav:
       - Vessel Lumen Threshold Pipeline: VESSEL_LUMEN_THRESHOLD_PIPELINE.md
       - Block-Face Registration: BLOCKFACE_REGISTRATION.md
       - Morphological Cluster Discovery: CLUSTER_DISCOVERY.md
+      - Manifold Sampling for LMD: MANIFOLD_SAMPLING.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 

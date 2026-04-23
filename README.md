@@ -11,7 +11,7 @@
 Detect cells in whole-slide CZI images, classify them by type and marker expression, analyze spatial organization, and export selected cells for laser microdissection and mass spectrometry. End-to-end DVP (Deep Visual Proteomics) from slide to spatial proteomics.
 
 ```
-CZI slide → AI detection → annotation → classification → spatial analysis → LMD export → mass spec
+CZI slide → AI detection → annotation → classification → spatial analysis → LMD export → MS queue → mass spec
 ```
 
 ---
@@ -183,7 +183,7 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 | Step | What happens | Time |
 |------|-------------|------|
 | 1. **Inspect** | Read CZI channel metadata (`xlseg info`) | seconds |
-| 2. **Detect** | AI segmentation (Cellpose/InstanSeg + SAM2). Checkpointed per-tile. | 1-3 hours |
+| 2. **Detect** | AI segmentation (Cellpose/InstanSeg + SAM2). Checkpointed per-tile. Slide-wide preprocessing (flat-field + tissue filter) cached automatically so reruns/resumes/shards skip the ~1-2h rescan. | 1-3 hours |
 | 3. **Post-process** | Contour extraction + background correction + nuclear counting (automatic) | minutes |
 | 4. **Annotate** | Click yes/no on cell crops in HTML viewer. Export JSON. | 10-30 min |
 | 5. **Train** | RF classifier from annotations (morph, SAM2, or all features) | seconds |
@@ -191,6 +191,7 @@ The pipeline follows a **detect-once, classify-later** design. All features are 
 | 7. **Markers** | Classify pos/neg per fluorescent channel (SNR ≥ 1.5 default) | seconds |
 | 8. **Explore** | UMAP, Leiden clustering, spatial networks, tissue zonation | minutes |
 | 9. **Export** | LMD XML with adaptive contours + 384-well plates, or SpatialData zarr | seconds |
+| 10. **MS queue** | Thermo Xcalibur CSV per 96-well box + sample-key sidecar for downstream joins (`xlseg ms-queue`) | seconds |
 
 ---
 
@@ -322,6 +323,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Global cluster + spatial divergence | `scripts/global_cluster_spatial_viewer.py` | Inverse: cluster ALL cells globally, rank by spatial-divergence metrics (`focal_multimodal`, `k_90`) to find "same feature profile, different anatomy" cell populations |
 | Morphological cluster discovery | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` | HDBSCAN in PCA space with reciprocal-best-match Jaccard stability + vectorized Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 doesn't drown morphology; `-2` sentinel distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. See [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) |
 | Manifold sampling (LMD pools) | `xlseg manifold-sample` / `scripts/manifold_sample.py` | FPS + Voronoi partition the whole population into K morphologically-coherent "manifold groups", then Ward on xy within each `(group, organ)` pair emits spatially-tight replicate pools at a fixed tissue-area budget (default 2500 µm² ≈ 25 cells). Same embedding as rare-cell discovery; output is LMD-ready pools, not cluster labels. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for review and `xlseg export-lmd` for Leica XML. See [docs/MANIFOLD_SAMPLING.md](docs/MANIFOLD_SAMPLING.md) |
+| MS queue (Thermo Xcalibur) | `xlseg ms-queue` / `scripts/build_ms_queue.py` | Repack 384-well LMD replicates into 96-well autosampler boxes (A1–G11) and emit Thermo queue CSVs (one per quadrant) with a `_key.csv`/`_key.json` sidecar joining `File Name` → all sample metadata for DIA-NN / Spectronaut / `OmicLinker`. Multi-plate, per-row method callable, and Windows path auto-format supported. See [docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur](docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur) |
 | Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
 | Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
