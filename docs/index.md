@@ -11,7 +11,8 @@ integrates with the scverse ecosystem (scanpy, AnnData, SpatialData).
 
 The repo ships slash commands (`/analyze`, `/new-experiment`, `/czi-info`, ...) and
 a pipeline-aware `CLAUDE.md` that let Claude Code walk you through the whole
-workflow — install, detection, classification, LMD export — as a conversation.
+workflow — install, detection, classification, LMD export, MS queue — as a
+conversation.
 
 ```bash
 # Install Claude Code once (macOS/Linux)
@@ -73,6 +74,11 @@ xlseg cluster \
 
 # 8. Quick quality check (detection count, area stats, marker profiles)
 xlseg qc /path/to/output
+
+# 9. LMD XML + MS queue CSV (after placing reference crosses in Napari)
+xlseg export-lmd --detections ... --crosses ... --output-dir .../lmd --export
+xlseg ms-queue  --samples .../lmd/replicates.csv --config ms_queue.yaml \
+                --output-dir .../ms_queues --combined
 ```
 
 !!! tip

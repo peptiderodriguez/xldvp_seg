@@ -188,6 +188,158 @@ After CW90 rotation, the display height equals the original CZI width. The expor
 | `shapes.csv` | Coordinates with well/cluster assignments |
 | `shapes_cluster_summary.json` | Cluster details (when `--clusters` is used) |
 
+## Mass Spec Queue (Thermo Xcalibur)
+
+After LMD cutting, samples are physically transferred from the 384-well
+collection plate into one or more 96-well "boxes" for mass spec. `xlseg
+ms-queue` turns the replicate manifest into a Thermo Xcalibur queue CSV
+per box — with a sample-key sidecar that joins every raw MS file name back
+to the original sample metadata.
+
+### How the 384 → 96 mapping works
+
+The LMD plate fills four quadrants (B2, B3, C2, C3). Each quadrant
+(77 wells) repacks 1:1 into a separate 96-well box (A1–G11; row H and
+col 12 of the box stay unused):
+
+| 384 row (even / odd) | 96 row | | 384 col | 96 col |
+|---|---|---|---|---|
+| B / C → | A |  | 2 or 3 → | 1 |
+| D / E → | B |  | 4 or 5 → | 2 |
+| F / G → | C |  | ...      | ... |
+| ... → G (no P pair) |  |  | 22 or 23 → | 11 |
+
+### Usage
+
+```bash
+xlseg ms-queue \
+    --samples  path/to/replicates.csv \
+    --config   path/to/ms_queue.yaml \
+    --output-dir path/to/ms_queues/ \
+    [--combined] [--well-col well] [--plate-col plate]
+```
+
+Only `file_name_template` and `autosampler_slots` are required. All blank-
+injection features and sample-ordering tools are optional; layer them as
+your MS protocol dictates.
+
+### YAML config (full reference)
+
+```yaml
+file_name_template: "{date}_OA1_PROJ_{slide}_{bone}_rep{replicate}_{well_384}_S{box}_{well_96}"
+autosampler_slots:              # 384 quadrant -> physical autosampler slot
+  B2: 2
+  B3: 3
+ms_method: null                 # path string (Windows auto-formatted) or null
+path: "D:\\"                    # Xcalibur 'Path' column value
+date: null                      # default: today's YYYYMMDD
+bracket_type: 4
+
+# -- interspersed empty wells from the 384 plate (optional) ------------------
+empty_marker:                   # rows in the input CSV whose quadrant slot
+  column: slide                 # is physically empty (e.g. wet-lab QC wells)
+  value: EMPTY
+empty_file_name_template: null  # default: "{date}_BLANK_plate{plate}_{quadrant}_{well_96}"
+
+# -- strip/rewrite input columns before rendering (optional) -----------------
+column_substitutions:           # regex str.replace applied to DataFrame pre-sort
+  slide:
+    pattern: "^2025_11_18_"
+    replacement: ""
+
+# -- grouping + separator BLANKs (optional, shape-stratified runs) -----------
+group_by_column: shapes         # column to group+sort samples by
+group_by_ascending: true        # numeric sort when the column coerces cleanly
+group_separator_blanks: true    # insert 1 BLANK between adjacent groups
+group_separator_blank_template: null  # default: "{date}_BLANK_{box_key}_{well_96}"
+
+# -- synthetic BLANK injections (optional) -----------------------------------
+bracketing_blanks: 3            # N leading + N trailing blanks (max 6). Row H
+                                # of the 96-well box: lead=H1..Hn, trail=H(13-n)..H12
+bracketing_blank_template: null # default: "{date}_BLANK_{box_key}_{position_tag}"
+interspersed_blanks: 8          # random blanks spread across each box via
+                                # segment-based placement (even distribution)
+interspersed_blank_template: null   # default: "{date}_BLANK_{box_key}_{well_96}"
+
+shuffle: true
+shuffle_seed: 42
+```
+
+**Template fields** available in every `*_template` string: every input
+column name (post `column_substitutions`), plus derived fields `{date}`,
+`{well_384}`, `{well_96}`, `{quadrant}`, `{box}` (slot number), `{plate}`.
+Bracketing/separator templates also get `{box_key}` (e.g. `B2`,
+`plate2_B3`) and `{position_tag}` (`lead1`/`trail1`/`interspersed1`/etc.).
+Derived fields win over input columns of the same name.
+
+### 96-well slot allocation for BLANKs
+
+Real samples fill A1–G11 (the 384→96 repack). BLANKs use the unused
+wells:
+
+| Blank kind | Well pool |
+|---|---|
+| Bracketing lead | `H1..H{n_bracket}` |
+| Bracketing trail | `H{13-n_bracket}..H12` |
+| Group separator + interspersed | Middle of row H (`H{n+1}..H{12-n}`) then column 12 (`A12..G12`) |
+
+Total pool size = 12 (row H) + 7 (col 12) = 19 wells per box. With
+`bracketing_blanks=3`, that leaves 13 wells for separators + interspersed.
+If the total exceeds the pool, the tool raises `ConfigError` up front.
+
+### Outputs
+
+| File | Role |
+|------|------|
+| `ms_queue_<box_key>.csv` | One per filled 384-quadrant box (`B2` single-plate or `plate{N}_{quadrant}` multi-plate). Header `Bracket Type=N`, columns `File Name, Path, Instrument Method, Position`. Per-box order: lead bracketing → real samples (with separators + interspersed interleaved) → trail bracketing. |
+| `ms_queue_combined.csv` | Optional (`--combined`) — per-box blocks concatenated in order (plate asc, then `QUADRANT_ORDER`). Only the **last** box contributes its trailing bracket; intermediate boundaries show only the next box's lead (single set of N, never 2N). |
+| `ms_queue_key.csv` + `ms_queue_key.json` | **Sample key**, always written. `File Name` column 1, every input column, plus derived `plate/well_384/quadrant/well_96/slot/Position/box_key/box_row_index/is_empty/instrument_method/queue_date/blank_kind`. `blank_kind ∈ {"" (real), "empty_well", "bracketing", "group_separator", "interspersed"}`. This is the authoritative join table for DIA-NN / Spectronaut / `OmicLinker`. |
+
+### Behavior notes
+
+- **Deterministic shuffle** per `(plate, quadrant)` from `shuffle_seed`.
+  Distinct seed offsets per box → independent orderings; reruns are
+  reproducible.
+- **`group_by_column`** sorts numerically when the column coerces cleanly
+  (`pd.to_numeric`), else lexically. Within each group the standard
+  shuffle still runs — overall order is group-ordered, within-group
+  random.
+- **`group_separator_blanks`** injects one BLANK at every transition
+  between adjacent groups. Separator wells are drawn from the
+  interspersed pool first, before interspersed wells, so the two
+  features coexist without collision.
+- **`interspersed_blanks`** uses a segment-based placement (N equal
+  segments, one random position per segment) — even coverage, not
+  clustered. Not applied to the lead/trail bracketing slots.
+- **Windows path auto-format** on `ms_method`: `/` → `\`; unix prefixes
+  (`/Volumes`, `/fs/pool`, `/Users`, `/home`, `/mnt`) log a warning
+  because Xcalibur on the MS PC will not resolve them.
+- **Duplicate File Name detection** across the whole run: `ConfigError`
+  listing collisions — Xcalibur overwrites silently otherwise.
+- **Multi-plate**: one per-quadrant box file per plate
+  (`plate{N}_<quadrant>.csv`). The same `autosampler_slots` applies to
+  every plate — the operator physically swaps boxes between plate runs.
+
+### Python API
+
+```python
+from xldvp_seg.lmd.ms_queue import ThermoQueueConfig, build_thermo_queues
+
+cfg = ThermoQueueConfig(
+    file_name_template="{date}_PROJ_{slide}_rep{replicate}_{well_384}_S{box}_{well_96}",
+    autosampler_slots={"B2": 2, "B3": 3},
+    # Rule-based method selection is Python-only; YAML accepts only str|null.
+    ms_method=lambda row: methods["high"] if row["n_cells"] > 200 else methods["low"],
+    empty_marker=("slide", "EMPTY"),
+    group_by_column="shapes",
+    group_separator_blanks=True,
+    bracketing_blanks=3,
+    interspersed_blanks=8,
+    column_substitutions={"slide": ("^2025_11_18_", "")},
+)
+outputs = build_thermo_queues("replicates.csv", cfg, "out/", combined=True)
+```
+
 ## Complete Example
 
 ```bash
@@ -220,7 +372,14 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/run_lmd_export.py \
     --output-dir /path/to/output/lmd \
     --min-score 0.5 --generate-controls --export
 
-# 5. Load shapes.xml into Leica LMD software
+# 5. Load shapes.xml into Leica LMD software, cut samples into 384-well plate
+
+# 6. Build Thermo MS queue from the replicate manifest
+xlseg ms-queue \
+    --samples /path/to/output/lmd/replicates.csv \
+    --config  /path/to/ms_queue.yaml \
+    --output-dir /path/to/output/ms_queues/ --combined
+# -> one queue CSV per 96-well box + sample_key.csv/json for downstream joins
 ```
 
 ## Troubleshooting

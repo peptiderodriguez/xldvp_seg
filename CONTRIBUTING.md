@@ -7,7 +7,7 @@ Thank you for your interest in contributing. This guide covers the essentials fo
 ```bash
 # Clone and install in editable mode with dev dependencies
 git clone <repo-url> && cd xldvp_seg
-pip install -e ".[dev]"
+./install.sh --dev
 pre-commit install
 ```
 
@@ -17,7 +17,7 @@ Pre-commit hooks (ruff + black) run automatically on each commit.
 
 - **Formatter:** Black, line-length 100
 - **Linter:** Ruff (E/F/W/I/N/UP/B/C4, E501 ignored)
-- **Python:** 3.10 or 3.11 (not 3.12+ — black formats differently)
+- **Python:** 3.11 only (`pyproject.toml` pins `requires-python = ">=3.11,<3.12"`)
 
 ```bash
 make lint      # check style

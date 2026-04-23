@@ -47,8 +47,10 @@ conda activate xldvp_seg
 # 1. PyTorch (pick CUDA or CPU)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # if no GPU
-# 2. Package
-pip install -e .
+# 2. Package — install from locked deps first, then the package itself
+#    (bare `pip install -e .` can hit scverse ResolutionTooDeep)
+pip install -r requirements-lock.txt
+pip install -e . --no-deps
 # 3. SAM2 + checkpoint
 pip install "git+https://github.com/facebookresearch/sam2.git"
 mkdir checkpoints
@@ -77,7 +79,7 @@ xlseg info slide.czi            # test CZI reading (ALWAYS run before detection)
 
 Specify CUDA version with `--cuda 11.8|12.1|12.4`.
 
-**Optional extras:** `pip install -e ".[brightfield]"` for brightfield foundation models. `pip install -e ".[instanseg]"` for InstanSeg segmenter.
+**Optional extras (after main install):** `pip install ".[brightfield]" --no-deps` for brightfield foundation models (UNI2 / Virchow2 / CONCH / Phikon-v2) or `pip install ".[instanseg]" --no-deps` for the InstanSeg segmenter. The `--no-deps` flag prevents re-resolution of transitive dependencies against the scverse constraints.
 
 ```bash
 # Run
@@ -323,7 +325,7 @@ For rare large cells (e.g., MKs), single-cell-per-well is sometimes feasible —
 | Global cluster + spatial divergence | `scripts/global_cluster_spatial_viewer.py` | Inverse: cluster ALL cells globally, rank by spatial-divergence metrics (`focal_multimodal`, `k_90`) to find "same feature profile, different anatomy" cell populations |
 | Morphological cluster discovery | `xlseg discover-rare-cells` / `scripts/discover_rare_cell_types.py` | HDBSCAN in PCA space with reciprocal-best-match Jaccard stability + vectorized Moran's I + Ward taxonomy. Per-group 1/√(dim) weighting so SAM2 doesn't drown morphology; `-2` sentinel distinguishes pre-filter drops from HDBSCAN noise. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for clickable-dendrogram review. See [docs/CLUSTER_DISCOVERY.md](docs/CLUSTER_DISCOVERY.md) |
 | Manifold sampling (LMD pools) | `xlseg manifold-sample` / `scripts/manifold_sample.py` | FPS + Voronoi partition the whole population into K morphologically-coherent "manifold groups", then Ward on xy within each `(group, organ)` pair emits spatially-tight replicate pools at a fixed tissue-area budget (default 2500 µm² ≈ 25 cells). Same embedding as rare-cell discovery; output is LMD-ready pools, not cluster labels. Pairs with `global_cluster_spatial_viewer.py --rare-mode` for review and `xlseg export-lmd` for Leica XML. See [docs/MANIFOLD_SAMPLING.md](docs/MANIFOLD_SAMPLING.md) |
-| MS queue (Thermo Xcalibur) | `xlseg ms-queue` / `scripts/build_ms_queue.py` | Repack 384-well LMD replicates into 96-well autosampler boxes (A1–G11) and emit Thermo queue CSVs (one per quadrant) with a `_key.csv`/`_key.json` sidecar joining `File Name` → all sample metadata for DIA-NN / Spectronaut / `OmicLinker`. Multi-plate, per-row method callable, and Windows path auto-format supported. See [docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur](docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur) |
+| MS queue (Thermo Xcalibur) | `xlseg ms-queue` / `scripts/build_ms_queue.py` | Repack 384-well LMD replicates into 96-well autosampler boxes (A1–G11) and emit Thermo queue CSVs (one per quadrant) with a `_key.csv/json` sidecar joining `File Name` → all sample metadata. Supports synthetic **bracketing blanks** (lead/trail in row H), **interspersed blanks** (segment-spread across each box), **group-by + separator blanks** (e.g. shape-count stratified runs with a flush between tiers), **regex column substitutions** (clean slide/sample names pre-template), multi-plate, and per-row method callables. Sample key tags each row `blank_kind ∈ {real, empty_well, bracketing, group_separator, interspersed}`. See [docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur](docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur) |
 | Per-region multinucleation | `scripts/region_multinuc_plot.py` | Histogram + KDE + Tukey fences + GMM(k=2 via BIC) outlier detection |
 | Transcript export | `scripts/export_transcript.py` | Claude Code session JSONL → markdown/HTML (curate + present modes with PNG export) |
 
@@ -397,7 +399,7 @@ Chains detection → marker classification → nuclei counting → HTML viewer a
 xldvp_seg/              # Main package (pip install -e .)
 ├── api/                   # Scanpy-style API (tl primary, pl.umap + io.to_spatialdata implemented)
 ├── classification/        # Vessel type classifiers, feature selection
-├── cli/                   # xlseg CLI entry point (15 subcommands)
+├── cli/                   # xlseg CLI entry point (16 subcommands)
 ├── core/                  # SlideAnalysis central state object + detection schema
 ├── detection/strategies/  # 8 strategies, self-registered via @register_strategy
 ├── io/                    # CZI loader, HTML export (6 modules), OME-Zarr, SpatialData export
@@ -413,7 +415,7 @@ xldvp_seg/              # Main package (pip install -e .)
 
 scripts/                   # 44 reusable CLI tools
 examples/                  # Project-specific analyses by experiment
-tests/                     # pytest suite (1206 tests across 59 files — run `make test`)
+tests/                     # pytest suite (~1473 tests — run `make test`)
 ```
 
 ## Key Design Decisions

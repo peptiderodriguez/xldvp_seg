@@ -199,7 +199,7 @@ For the MK proteomics workflow where replicates and well assignments are already
 
 ### Step R1: Build replicates
 ```bash
-PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/select_mks_for_lmd.py \
+PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/examples/bone_marrow/select_mks_for_lmd.py \
     --detections <detections.json> \
     --output-dir <output>/replicates
 ```
@@ -239,7 +239,7 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/napari_view_lmd_export.py \
 ## Rules
 
 - 384-well + serpentine + controls + clustering are always on by default — don't ask about them unless the user specifically wants to change something
-- Multi-plate: >308 wells overflow automatically to additional plates via `xldvp_seg.lmd.well_plate`. For proteomics replicates, use `xldvp_seg.lmd.selection.select_cells_for_lmd()` with `scripts/select_mks_for_lmd.py` as an MK-specific example
+- Multi-plate: >308 wells overflow automatically to additional plates via `xldvp_seg.lmd.well_plate`. For proteomics replicates, use `xldvp_seg.lmd.selection.select_cells_for_lmd()` with `examples/bone_marrow/select_mks_for_lmd.py` as an MK-specific example
 - Empty QC wells: `insert_empty_wells()` from `xldvp_seg.lmd.well_plate` inserts ceil(10% of samples) evenly across all used quadrants/plates
 - Use `$XLDVP_PYTHON` as interpreter, `PYTHONPATH=$REPO`
 - All coordinates are [x, y] (horizontal, vertical)

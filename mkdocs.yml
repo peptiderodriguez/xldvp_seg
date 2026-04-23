@@ -56,11 +56,14 @@ nav:
       - Visualization: api/visualization.md
   - Guides:
       - NMJ Pipeline: NMJ_PIPELINE_GUIDE.md
+      - NMJ LMD Workflow: NMJ_LMD_EXPORT_WORKFLOW.md
       - Vessel Analysis: VESSEL_COMMUNITY_ANALYSIS.md
       - Vessel Lumen Threshold Pipeline: VESSEL_LUMEN_THRESHOLD_PIPELINE.md
       - Block-Face Registration: BLOCKFACE_REGISTRATION.md
       - Morphological Cluster Discovery: CLUSTER_DISCOVERY.md
       - Manifold Sampling for LMD: MANIFOLD_SAMPLING.md
+  - Experiments:
+      - "MK Analysis Status (Mar 2026)": MK_ANALYSIS_STATUS.md
   - Contributing: contributing.md
   - Changelog: changelog.md
 

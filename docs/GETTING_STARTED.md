@@ -1258,9 +1258,9 @@ repeated network I/O.
 
 ### Empty Results
 
-- Verify channel index matches fluorescence target (`--show-metadata`)
-- Check that `--sample-fraction` is not too low for sparse structures
+- Verify channel index matches fluorescence target (run `xlseg info slide.czi`)
 - Ensure tissue detection threshold is appropriate (check with `scripts/preview_preprocessing.py`)
+- For large cells (MK ≥100 µm, multinucleated hepatocytes), bump `--tile-overlap 0.25` so cells are fully contained in at least one tile's overlap zone
 
 ### Slow Processing
 

@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — hardening pass from 6-agent code review (Apr 23 2026)
+
+Two-phase remediation after parallel bioinformatics-code-review agents flagged issues across detection, analysis, classification, LMD + MS queue, I/O, and testing. All Critical + High items addressed; **50+ new regression tests**; full suite: **1473 passed, 7 skipped, 0 failed**.
+
+**Wrong-results bugs**
+- **Detection resume dropped completed detections on partial re-run** (`xldvp_seg/pipeline/detection_loop.py`). When `0 < completed < total`, dedup + finalize saw only the newly-processed subset. Now reloads completed-tile features from disk before the submission loop. For `--cell-type vessel` partial resumes, emits a warning that cross-tile merge state from completed tiles is not persisted (user should consider full re-run).
+- **Cross-tile merged vessels routed under wrong tile_key** in Phase 1/3 mask-read grouping. Merged vessels now carry `skip_postdedup=True` with contours set at merge time; excluded from `by_tile` grouping AND from Phase 2 background correction (their missing `_bg_quick_medians` would otherwise poison neighbor-median bg estimates with sentinel zeros).
+- **HDF5 mask write race on tile retry** (`multigpu_worker.py`) → atomic `tmp + os.replace` pattern.
+- **`background.has_raw` any-of-first-10** silently flipped `value_key` to `_median_raw` on mixed-partial-rerun state → majority-of-20 probe.
+- **OmicLinker FDR synthetic 1.0s inflated BH `m`**. Now subsets `|r|≥0.2` only when the slow (Pearson) path ran; Spearman fast path unchanged (no synthetic 1.0s to exclude). Tracks via a `slow_path_prefiltered` flag.
+- **MS queue wrote per-box CSVs before validating**. Now accumulates rows, runs dedup + forbidden-char checks, then writes — `ConfigError` on collision leaves output dir empty.
+- **`joblib.load` exception tuple** missed `pickle.UnpicklingError` + `struct.error` from corrupted/truncated blobs → broadened in `classification/base.py` + `utils/detection_utils.py`; corrupt classifier files now wrap as `ClassificationError` / `DataLoadError`.
+
+**Security**
+- **XSS in annotation-viewer onclick handlers.** `onclick="setLabel('{uid}', ...)"` used HTML-escape only — a `'` in a UID broke out of the JS string and could execute arbitrary JS. Nested escape now applied across `html_export.py`, `html_generator.py`, `html_batch_export.py` via new `_esc_js_in_attr()` helper + `&quot;...&quot;` outer delimiters.
+- **`_js_esc` extended** to escape `</` → `<\/` and `*/` → `*\/` so payloads can't terminate `<script>` blocks or JS comments.
+- **`region_viewer.py`**: replaced client-side `innerHTML += '<span>' + l.name` with `createElement` + `textContent` (DOM injection fix).
+- **`all_features_json`** embedded in `<script>` now uses `safe_json` (escapes `</script>`).
+- **`serve_html.py` PID file** written with `0o600` perms (was 0o644 — tunnel URL was world-readable via `/tmp/xldvp_seg_serve_info.json`). Also warns when `--path` resolves outside typical pipeline output tree.
+
+**Reproducibility**
+- **New `xldvp_seg.utils.seeding.resolve_seed()`** helper with one-shot `UserWarning` when caller passes `seed=None` (fallback 42). Distinguishes "deliberate default" from "never supplied".
+- **Seed threaded** through `classify_gmm`, `tl.train` (now also uses `StratifiedKFold(shuffle=True)`), `process_region`, `run_subclustering`, `ClusteringConfig`, and the Louvain / UMAP calls in `spatial_network.py`.
+- **New `--seed` CLI flag** on `scripts/region_pca_viewer.py`, `scripts/combined_region_viewer.py`, `scripts/global_cluster_spatial_viewer.py`. Same seed → same PCA / UMAP / Leiden / k-means output.
+- **`run_segmentation.py` HTML subsampling** now uses `np.random.default_rng(args.random_seed).choice` (was `random.sample`, which ignored the user's seed).
+
+**Correctness + robustness**
+- **`apply_classifier.py` arity guard**: if a legacy Pipeline's sidecar feature-name file is missing, scoring no longer crashes mid-prediction with an opaque sklearn `ValueError`; raises `ClassificationError` with a clear "retrain or restore sidecar" message.
+- **`VesselClassifier.MODEL_TYPE`** is now non-empty — the type-mismatch guard at load time no longer silently passes stale saves of one classifier as another.
+- **`feature_loader._find_feature_names`** union-scans ≥10 detections (was first-non-empty only — broke when the first had a partial feature set).
+- **`strategy_factory.py`** mesothelium no longer defaults `pixel_size_um` to `0.22`; raises `ConfigError` if missing, matching the "never hardcode pixel sizes" rule.
+- **`multigpu_shm.py` SIGINT/SIGTERM handlers** installed in `SharedSlideManager.__init__` (was module scope). Read-only CLI subcommands (`xlseg info`, `xlseg system`, `xlseg strategies`) no longer hijack `Ctrl-C` → `KeyboardInterrupt`.
+
+**Documentation**
+- Subcommand count corrected (13/14/15 → **16**) across `README.md`, `CLAUDE.md`, `docs/cli-reference.md`.
+- `CONTRIBUTING.md` + `docs/tutorial.md`: `pip install -e ".[dev]"` → `./install.sh --dev`; Python 3.11 only.
+- `docs/GETTING_STARTED.md`: removed `--sample-fraction not too low` advice that contradicted the "always 1.0" rule.
+- Root `CHANGELOG.md` now points here (avoids duplication drift).
+- `.claude/commands/lmd-export.md`: fixed stale `scripts/select_mks_for_lmd.py` path → `examples/bone_marrow/select_mks_for_lmd.py`.
+- `mkdocs.yml` surfaces previously-orphaned `NMJ_LMD_EXPORT_WORKFLOW.md` + `MK_ANALYSIS_STATUS.md`.
+
+**New test files** (8 files, 50+ tests): `test_multigpu_worker_mask_write.py`, `test_background_has_raw.py`, `test_omic_linker_fdr.py`, `test_html_xss.py`, `test_classification_load_errors.py`, `test_seed_reproducibility.py`, `test_post_detection_skip.py`, `test_ms_queue_cli.py`.
+
 ### Changed — baseline tile overlap raised 0.10 → 0.15 (Apr 23 2026)
 
 - **`--tile-overlap` default changed from `0.10` to `0.15`** (`xldvp_seg.pipeline.cli`). 15% of a 3000-px tile at 0.1722 µm/px is 77 µm on each side, which fully contains cells up to ~155 µm diameter — covering polyploid hepatocytes (octoploid ~80 µm) and most multinucleated cells without the silent edge-bisection artifact the 0.10 default had. MK-scale cells (≥100 µm diameter) still want the explicit `--tile-overlap 0.25` / `tile_overlap: 0.25` per the MK strategy guidance. Docs updated in `CLAUDE.md`, `docs/cli-reference.md`, `docs/GETTING_STARTED.md`, `.claude/commands/analyze.md`.

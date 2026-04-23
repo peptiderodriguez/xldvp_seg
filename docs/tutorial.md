@@ -6,7 +6,7 @@ scored, marker-classified detections ready for downstream analysis or LMD export
 
 ## Prerequisites
 
-- xldvp_seg installed (`pip install -e .`)
+- xldvp_seg installed via `./install.sh` (see [Getting Started](GETTING_STARTED.md))
 - A CZI file with at least a cytoplasmic and nuclear channel
 - GPU access (SLURM or local)
 

@@ -153,7 +153,7 @@ Use `/analyze` for the interactive catalog. Scripts beyond detect → classify �
 - **Curvilinear patterns**: `detect_curvilinear_patterns.py` (strips/ribbons via graph linearity).
 - **Markers**: `classify_markers.py` (SNR/Otsu/GMM).
 - **LMD sampling**: `sliding_window_sampling.py`, `paper_figure_sampling.py`, `select_transect_cells_for_lmd.py`, `cluster_detections.py`.
-- **MS queue (Thermo Xcalibur)**: `xlseg ms-queue --samples mk_replicates.csv --config queue.yaml --output-dir out/ [--combined]` — converts an LMD replicate manifest (384-well) into per-box Thermo queue CSVs (one per quadrant, mapped to 96-well A1–G11), plus a `*_key.csv`/`*_key.json` sidecar joining the rendered `File Name` back to all sample metadata for downstream analysis. Supports multi-plate inputs, per-row `ms_method` callables, and Windows path auto-formatting. Core: `xldvp_seg.lmd.ms_queue`.
+- **MS queue (Thermo Xcalibur)**: `xlseg ms-queue --samples replicates.csv --config queue.yaml --output-dir out/ [--combined]` — LMD 384-well manifest → per-box 96-well Thermo queue CSVs (A1–G11) + `*_key.csv/json` sidecar joining `File Name` to all sample metadata. Optional YAML knobs: `bracketing_blanks` (lead/trail in row H), `interspersed_blanks` (segment-spread), `group_by_column + group_separator_blanks` (stratified runs with flush between tiers, e.g. by cell count), `column_substitutions` (regex rewrites), `empty_marker` (flag plate empties as BLANKs). Multi-plate, per-row Python `ms_method` callables, and Windows path auto-format supported. `blank_kind` column distinguishes `real / empty_well / bracketing / group_separator / interspersed`. Core: `xldvp_seg.lmd.ms_queue`.
 - **Nuclear counting**: `--count-nuclei` (default ON) or standalone `count_nuclei_per_cell.py`.
 - **Post-hoc mask refinement**: `scripts/refine_detection_masks.py --run-dir ... --czi-path ... --cell-type ...` — adaptive per-cell intensity-based boundary peeling. Removes white/bright bleed (bone, empty space) from masks without re-running detection. Thin wrapper around `xldvp_seg.utils.mask_cleanup.refine_mask_intensity`; generic across cell types. Recomputes `contour_px/contour_um/area/area_um2/solidity/circularity` and writes `{cell_type}_detections_refined.json`.
 - **Multi-slide HTML regen**: `scripts/regenerate_html.py --czi-dir <dir> --detections combined.json` — groups by slide, processes CZIs via ProcessPool (cap via `XLDVP_MAX_SLIDE_WORKERS`, default 8), merges into one paginated HTML. Also supports alt detection JSON formats (`center_x/center_y`, `contour_yx`, `mk_score`).
@@ -185,7 +185,12 @@ Use `/analyze` for the interactive catalog. Scripts beyond detect → classify �
 
 ## Critical Code Patterns
 
-**Random seeds:** `--random-seed` (default 42) sets numpy/stdlib/torch seeds. cuDNN non-determinism means slight variation across runs; full determinism needs `torch.use_deterministic_algorithms(True)` (~10-20% overhead, not default).
+**Random seeds:** `--random-seed` (default 42) sets numpy/stdlib/torch seeds AND propagates through analysis entry points (`classify_gmm`, `tl.train`, `process_region`, `run_subclustering`, `ClusteringConfig.seed`, Louvain/UMAP in `spatial_network`). Standalone analysis scripts (`region_pca_viewer.py`, `combined_region_viewer.py`, `global_cluster_spatial_viewer.py`) take `--seed <int>`. When a seed kwarg is omitted, `xldvp_seg.utils.seeding.resolve_seed()` emits a one-shot `UserWarning` and falls to 42 — distinguishes "deliberate default" from "unset". cuDNN non-determinism still introduces slight variation in detection; full determinism needs `torch.use_deterministic_algorithms(True)` (~10-20% overhead, not default).
+
+**HTML escaping:** three helpers in `xldvp_seg.io.html_utils`:
+- `_esc(x)` — HTML-escape (attribute + body contexts)
+- `_js_esc(x)` — JS string literal escape, also handles `</` and `*/` sequences so payloads can't terminate `<script>` blocks or JS comments
+- `_esc_js_in_attr(x)` — nested: `_esc(_js_esc(x))` for JS-string-inside-HTML-attribute (e.g. `onclick="fn(&quot;{x}&quot;, ...)"`). Always use this for `onclick` handlers; outer delimiters MUST be `&quot;` (HTML entity), not literal `"`.
 
 **Device handling:** Use `xldvp_seg.utils.device`: `get_default_device()`, `device_supports_gpu()` (for Cellpose `gpu=`, not `torch.cuda.is_available()`), `empty_cache()` (handles cuda/mps/cpu). Never hardcode `device="cuda"`.
 
@@ -304,7 +309,7 @@ Scanpy-style wrappers operating on `SlideAnalysis` objects.
 
 ## Entry Points
 
-**Core scripts:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). **SLURM launcher:** `scripts/run_pipeline.sh` (YAML-driven). **CLI:** `xlseg` with 15 subcommands.
+**Core scripts:** `run_segmentation.py` (detection), `run_lmd_export.py` (LMD XML), `train_classifier.py` (RF), `serve_html.py` (viewer). **SLURM launcher:** `scripts/run_pipeline.sh` (YAML-driven). **CLI:** `xlseg` with 16 subcommands.
 
 **Scripts (`scripts/`):** 43 reusable tools — see `ls scripts/` or README for full table. Core logic for 11 modules lives in `xldvp_seg/analysis/` (scripts delegate).
 

@@ -1053,22 +1053,45 @@ PYTHONPATH=$REPO $XLDVP_PYTHON $REPO/scripts/sliding_window_sampling.py \
 ```
 Output filenames include timestamps so successive runs don't overwrite.
 
-**Step 28c — MS queue (Thermo Xcalibur).** After LMD cuts samples into the 384-well plate, repack the replicate manifest into per-box 96-well queue CSVs for the MS autosampler. Each 384 quadrant (B2, B3, C2, C3) maps 1:1 to a 96-well box (A1–G11).
+**Step 28c — MS queue (Thermo Xcalibur).** After LMD cuts samples into the 384-well plate, repack the replicate manifest into per-box 96-well queue CSVs for the MS autosampler. Each 384 quadrant (B2, B3, C2, C3) maps 1:1 to a 96-well box (A1–G11, real samples; row H and col 12 reserved for synthetic BLANKs).
 
-**Ask the user via AskUserQuestion** whether to build the MS queue now. If yes:
+**Ask the user via AskUserQuestion** whether to build the MS queue now. If yes, ask about the BLANK-injection profile (carryover controls): whether they want bracketing BLANKs (lead/trail), interspersed BLANKs (scattered through the queue), and/or group-stratified ordering (sort by e.g. cell count with a separator BLANK between tiers). Then:
 
-1. Confirm inputs — replicate CSV (from Step 28), autosampler slot for each quadrant present, whether an Xcalibur method path is known. Method defaults to empty (operator fills in before Xcalibur); if a path is provided, it's Windows-formatted automatically (slashes → backslashes, unix prefixes warned).
-2. Draft a YAML config (`ms_queue.yaml`):
+1. Confirm inputs — replicate CSV (from Step 28), autosampler slot for each quadrant present, whether an Xcalibur method path is known. Method defaults to empty (operator fills in before Xcalibur); if provided, it's Windows-formatted automatically (slashes → backslashes, unix prefixes warned).
+2. Draft a YAML config (`ms_queue.yaml`), layering only the features the user asked for:
 ```yaml
-file_name_template: "{date}_OA1_<prefix>_{slide}_{bone}_rep{replicate}_{well_384}_{well_96}"
+# -- required ---------------------------------------------------------------
+file_name_template: "{date}_OA1_<PROJ>_{slide}_{bone}_rep{replicate}_{well_384}_S{box}_{well_96}"
 autosampler_slots: {B2: 2, B3: 3}
+
+# -- commonly used ---------------------------------------------------------
 ms_method: null                  # or "C:\\Xcalibur\\methods\\..."
 path: "D:\\"
-empty_marker: {column: slide, value: EMPTY}
+empty_marker: {column: slide, value: EMPTY}   # omit if plate has no empties
 shuffle: true
 shuffle_seed: 42
+
+# -- optional: strip/rewrite input columns pre-template --------------------
+column_substitutions:
+  slide: {pattern: "^2025_11_18_", replacement: ""}
+
+# -- optional: BLANK injections --------------------------------------------
+bracketing_blanks: 3             # 3 lead (H1..H3) + 3 trail (H10..H12) per box
+bracketing_blank_template: "{date}_OA1_<PROJ>_BLANK_S{box}_{well_96}"
+interspersed_blanks: 8           # scattered evenly; uses H4..H9 + A12..G12
+interspersed_blank_template: "{date}_OA1_<PROJ>_BLANK_S{box}_{well_96}"
+
+# -- optional: stratified ordering + group-separator BLANKs ----------------
+group_by_column: shapes          # any column with a natural sort order
+group_by_ascending: true
+group_separator_blanks: true     # injects 1 BLANK between adjacent groups
+group_separator_blank_template: "{date}_OA1_<PROJ>_BLANK_S{box}_{well_96}"
 ```
-   Template fields: every input CSV column + `{date}`, `{well_384}`, `{well_96}`, `{quadrant}`, `{box}`, `{plate}`. The rendered `File Name` becomes the raw MS file name — include enough fields (slide/bone/replicate/well) that rows are uniquely identifiable at a glance.
+
+Template fields: every input column (post `column_substitutions`) + `{date}`, `{well_384}`, `{well_96}`, `{quadrant}`, `{box}` (slot), `{plate}`. Bracketing/separator templates also get `{box_key}` and `{position_tag}`. The rendered `File Name` becomes the raw MS file name — include enough fields that rows are uniquely identifiable at a glance.
+
+**Slot pool for BLANKs:** real samples fill A1–G11. Bracketing lead = `H1..H{n_bracket}`, trail = `H{13-n_bracket}..H12`. Separators + interspersed share the remaining middle-H + col-12 pool (13 wells with `n_bracket=3`). `build_thermo_queues` raises `ConfigError` up front if the total BLANK count exceeds the pool.
+
 3. Run:
 ```bash
 xlseg ms-queue \
@@ -1077,11 +1100,11 @@ xlseg ms-queue \
     --output-dir <output>/ms_queues/ --combined
 ```
 4. Outputs:
-   - `ms_queue_<quadrant>.csv` (one per filled quadrant, or `ms_queue_plate{N}_<quadrant>.csv` for multi-plate). Header `Bracket Type=4`, columns `File Name, Path, Instrument Method, Position`.
-   - `ms_queue_combined.csv` (with `--combined`) — all boxes in one file.
-   - **`ms_queue_key.csv` + `ms_queue_key.json`** (always) — the authoritative join table. `File Name` column 1, followed by every input metadata column and the derived `quadrant/well_96/slot/Position/box_key/box_row_index/is_empty/instrument_method/queue_date`. Use this to link DIA-NN / Spectronaut output back to morphology for `OmicLinker` (Step 30).
+   - `ms_queue_<box_key>.csv` — one per filled 384-quadrant. Order: lead bracketing → samples (with separators + interspersed interleaved) → trail bracketing. `Bracket Type=N` header.
+   - `ms_queue_combined.csv` (with `--combined`) — per-box blocks concatenated; only the last box contributes its trailing bracket (single set of N at internal boundaries, not 2N).
+   - **`ms_queue_key.csv` + `ms_queue_key.json`** (always) — the authoritative join table. `File Name` column 1, every input metadata column, plus derived `quadrant/well_96/slot/Position/box_key/box_row_index/is_empty/instrument_method/queue_date/blank_kind`. `blank_kind ∈ {"", empty_well, bracketing, group_separator, interspersed}` lets you filter to real samples or trace BLANK carryover positions. Use this to link DIA-NN / Spectronaut output back to morphology for `OmicLinker` (Step 30).
 
-**Key behaviors:** BLANK rows (empty wells per `empty_marker`) are kept for carryover QC; shuffle is deterministic per `(plate, quadrant)`; duplicate rendered File Names raise `ConfigError` (Xcalibur would overwrite silently otherwise). See `docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur` for full schema and the Python API with rule-based per-row method selection.
+**Key behaviors:** BLANK types coexist and share the same BLANK pool via a documented allocation order (bracketing first from row H ends; separators and interspersed from the middle-H + col-12 pool). Shuffle is deterministic per `(plate, quadrant)`. Duplicate rendered File Names raise `ConfigError` — Xcalibur overwrites silently otherwise. `group_by_column` sorts numerically when the column coerces cleanly, else lexically. See `docs/LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur` for full schema and the Python API with rule-based per-row method selection.
 
 ---
 
@@ -1231,6 +1254,8 @@ adata = slide.to_anndata()
 ## Analysis Catalog
 
 Reference tables — introduce capabilities as they become relevant, don't list upfront. Use this to look up tools when the user asks "what can I do?" or at an appropriate pipeline point.
+
+> **Reproducibility:** analysis scripts that do PCA / UMAP / Leiden / k-means accept `--seed <int>` for bit-identical reruns. `scripts/region_pca_viewer.py`, `scripts/combined_region_viewer.py`, and `scripts/global_cluster_spatial_viewer.py` all take this flag; pass the same seed across re-runs to get stable embeddings and cluster assignments. Without `--seed`, a one-shot `UserWarning` fires and the module default (42) is used.
 
 ### General analyses
 

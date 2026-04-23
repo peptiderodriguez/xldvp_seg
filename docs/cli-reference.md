@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `xlseg` command provides 13 subcommands covering the full pipeline from
+The `xlseg` command provides 16 subcommands covering the full pipeline from
 CZI inspection through detection, classification, and export.
 
 ```bash
@@ -181,28 +181,44 @@ xlseg export-lmd \
 Build Thermo Xcalibur MS queue CSVs from an LMD replicate manifest. Repacks
 384-well quadrants (B2, B3, C2, C3) into 96-well autosampler boxes (A1–G11),
 emits one queue CSV per box, and writes a sample-key sidecar (`_key.csv` +
-`_key.json`) joining each raw `File Name` back to full sample metadata for
-downstream analysis.
+`_key.json`) that joins each raw `File Name` back to full sample metadata
+for downstream analysis.
 
 ```bash
 xlseg ms-queue \
-    --samples    path/to/mk_replicates.csv \
+    --samples    path/to/replicates.csv \
     --config     path/to/ms_queue.yaml \
     --output-dir path/to/ms_queues/ \
     --combined
 ```
 
+CLI flags (all YAML-config-driven — the YAML is the real surface):
+
 | Flag | Description |
 |------|-------------|
-| `--samples` | Input replicates CSV (must have `well` and optionally `plate` column) |
-| `--config` | YAML with `file_name_template`, `autosampler_slots`, and optional `ms_method` / `empty_marker` / shuffle / bracket_type |
+| `--samples` | Input replicates CSV (must have `well` column; `plate` optional) |
+| `--config` | YAML config file (see below) |
 | `--well-col` | 384-well address column (default `well`) |
 | `--plate-col` | Plate column for multi-plate inputs (default `plate`; pass empty for single-plate) |
 | `--combined` | Additionally write `ms_queue_combined.csv` — per-box files are always written |
 | `--out-prefix` | Filename prefix (default `ms_queue`) |
 
-See [LMD Export Guide — Mass Spec Queue](LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur)
-for the full YAML schema, 384→96 mapping, and behavior notes.
+YAML config keys (see [LMD Export Guide — Mass Spec Queue](LMD_EXPORT_GUIDE.md#mass-spec-queue-thermo-xcalibur) for full semantics, templates, and blank-slot geometry):
+
+| Key | Purpose |
+|-----|---------|
+| `file_name_template` *(required)* | Xcalibur `File Name` format string (any input column + derived fields) |
+| `autosampler_slots` *(required)* | `{B2: 2, B3: 3, ...}` — quadrant → slot |
+| `ms_method` | Method path (Windows auto-formatted) or `null` |
+| `path`, `date`, `bracket_type` | Xcalibur `Path`, `{date}` override, `Bracket Type=N` header |
+| `empty_marker` | Flag physical-empty rows in the 384 plate as shuffled-in BLANKs |
+| `bracketing_blanks` | N leading + N trailing synthetic BLANKs per box (max 6; row H) |
+| `interspersed_blanks` | N synthetic BLANKs scattered evenly (segment-based) across each box |
+| `group_by_column` + `group_by_ascending` | Sort samples by column before shuffling within groups |
+| `group_separator_blanks` | Inject one BLANK between adjacent groups |
+| `column_substitutions` | Regex `str.replace` rewrites applied to input columns before templating |
+| `shuffle`, `shuffle_seed` | Deterministic per-(plate, quadrant) shuffle |
+| `{empty,bracketing,interspersed,group_separator}_blank_template` | Per-BLANK-kind filename template overrides |
 
 ---
 
