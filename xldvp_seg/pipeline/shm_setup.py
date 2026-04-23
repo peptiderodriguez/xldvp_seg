@@ -12,6 +12,7 @@ from xldvp_seg.detection.tissue import calibrate_tissue_threshold, filter_tissue
 from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.pipeline.preprocessing import apply_slide_preprocessing
 from xldvp_seg.pipeline.samples import generate_tile_grid
+from xldvp_seg.preprocessing import tissue_filter_cache as tissue_cache
 from xldvp_seg.utils.json_utils import atomic_json_dump
 from xldvp_seg.utils.logging import get_logger
 
@@ -216,29 +217,61 @@ def setup_shared_memory(
     # calibrate_tissue_threshold is variance-based and modality-agnostic — works for both.
     filter_kwargs = {"modality": "brightfield"} if rgb_mode else {}
     manual_threshold = getattr(args, "variance_threshold", None)
-    if manual_threshold is not None:
-        variance_threshold = manual_threshold
+    modality = "brightfield" if rgb_mode else "fluorescence"
+
+    # Tissue-filter cache — avoids the ~3-4 min recompute on reruns/resumes.
+    # Lives in the same cache dir as the flat-field profile (slide_output_dir by
+    # default, or --flat-field-cache-dir if set). Benefits brightfield equally
+    # since the filter runs for both modalities.
+    tissue_cache_dir = flat_field_cache_dir  # resolved above
+    tissue_cache_path = tissue_cache_dir / tissue_cache.CACHE_FILENAME
+    tissue_cache_meta = tissue_cache.build_cache_meta(
+        args,
+        tissue_channel=tissue_channel,
+        modality=modality,
+        manual_threshold=manual_threshold,
+        n_all_tiles=len(all_tiles),
+    )
+
+    _cached = tissue_cache.load(tissue_cache_path, tissue_cache_meta)
+    if _cached is not None:
+        variance_threshold, tissue_tiles = _cached
         logger.info(
-            f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)"
+            "Loaded tissue filter from cache: threshold=%.1f, %d tissue tiles (skipped calibration + filter scan)",
+            variance_threshold,
+            len(tissue_tiles),
         )
     else:
-        logger.info("Calibrating tissue threshold...")
-        variance_threshold = calibrate_tissue_threshold(
+        if manual_threshold is not None:
+            variance_threshold = manual_threshold
+            logger.info(
+                f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)"
+            )
+        else:
+            logger.info("Calibrating tissue threshold...")
+            variance_threshold = calibrate_tissue_threshold(
+                all_tiles,
+                calibration_samples=min(50, len(all_tiles)),
+                channel=tissue_channel,
+                tile_size=args.tile_size,
+                loader=loader,  # Loader handles mosaic origin offset correctly
+            )
+        logger.info("Filtering to tissue-containing tiles...")
+        tissue_tiles = filter_tissue_tiles(
             all_tiles,
-            calibration_samples=min(50, len(all_tiles)),
+            variance_threshold,
             channel=tissue_channel,
             tile_size=args.tile_size,
             loader=loader,  # Loader handles mosaic origin offset correctly
+            **filter_kwargs,
         )
-    logger.info("Filtering to tissue-containing tiles...")
-    tissue_tiles = filter_tissue_tiles(
-        all_tiles,
-        variance_threshold,
-        channel=tissue_channel,
-        tile_size=args.tile_size,
-        loader=loader,  # Loader handles mosaic origin offset correctly
-        **filter_kwargs,
-    )
+        try:
+            tissue_cache.save(
+                tissue_cache_path, variance_threshold, tissue_tiles, tissue_cache_meta
+            )
+            logger.info("Saved tissue filter cache: %s", tissue_cache_path.name)
+        except OSError as exc:
+            logger.warning("Could not write tissue filter cache %s: %s", tissue_cache_path, exc)
 
     if len(tissue_tiles) == 0:
         raise DetectionError(
