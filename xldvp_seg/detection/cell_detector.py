@@ -323,12 +323,10 @@ class CellDetector:
 
         _use_bf16 = cellpose_supports_bfloat16()
         if not _use_bf16:
-            import torch as _torch
-
             logger.info(
                 "Cellpose BFloat16 disabled (torch %s < 2.3 lacks upsample_linear1d "
                 "BFloat16 kernel used by Cellpose-SAM). Using fp32; ~20%% slower but correct.",
-                _torch.__version__,
+                torch.__version__,
             )
 
         self._cellpose = CellposeModel(

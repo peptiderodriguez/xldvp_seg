@@ -8,6 +8,7 @@ import gc
 import json
 import os
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -128,8 +129,6 @@ def _apply_flat_field_correction(args, all_channel_data, loader, *, slide_output
     computed fresh and written back to the cache for subsequent shards or
     ``--resume`` runs to reuse.
     """
-    from xldvp_seg.preprocessing.flat_field import estimate_illumination_profile
-
     logger.info(f"\n{'='*70}")
     logger.info("FLAT-FIELD ILLUMINATION CORRECTION")
     logger.info(f"{'='*70}")
@@ -145,38 +144,15 @@ def _apply_flat_field_correction(args, all_channel_data, loader, *, slide_output
     illumination_profile = (
         _load_flat_field_cache(cache_path, cache_meta) if cache_path is not None else None
     )
-
-    if illumination_profile is None:
-        acquired_lock = _try_acquire_compute_lock(lock_path)
-        if not acquired_lock and lock_path is not None:
-            logger.info(
-                "Flat-field profile is being computed by another process " "(lock=%s). Waiting...",
-                lock_path.name,
-            )
-            _wait_for_compute(cache_path, lock_path)
-            illumination_profile = _load_flat_field_cache(cache_path, cache_meta)
-
-        if illumination_profile is None:
-            logger.info("Estimating slide-level illumination profile...")
-            illumination_profile = estimate_illumination_profile(all_channel_data)
-            if cache_path is not None:
-                try:
-                    illumination_profile.save(cache_path, metadata=cache_meta)
-                    logger.info("Saved flat-field profile cache: %s", cache_path.name)
-                except OSError as exc:
-                    logger.warning("Could not write flat-field cache %s: %s", cache_path, exc)
-
-        if acquired_lock and lock_path is not None:
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
-    else:
-        # Reuse cached profile as-is (saves ~1-2h on the 5-channel mega-slide).
+    if illumination_profile is not None:
         logger.info(
             "Reusing cached flat-field profile (%d channels, block_size=%d).",
             len(illumination_profile.grids),
             illumination_profile.block_size,
+        )
+    else:
+        illumination_profile = _acquire_or_wait_for_profile(
+            all_channel_data, cache_path, lock_path, cache_meta
         )
 
     for ch in all_channel_data:
@@ -189,6 +165,58 @@ def _apply_flat_field_correction(args, all_channel_data, loader, *, slide_output
 
     gc.collect()
     logger.info("Flat-field correction complete.")
+
+
+def _acquire_or_wait_for_profile(all_channel_data, cache_path, lock_path, cache_meta):
+    """Compute the profile locally, or wait for another shard's write.
+
+    Loops until either (a) we acquire the compute lock and produce the profile
+    ourselves (releasing the lock in a ``finally`` so an exception mid-compute
+    never leaks the lock), or (b) another shard writes a valid cache while we
+    wait. If a wait returns without a cache hit (e.g. the other shard crashed
+    and its lock was force-removed), we retry the acquire instead of computing
+    without a lock, preventing concurrent redundant recomputes.
+    """
+    from xldvp_seg.preprocessing.flat_field import estimate_illumination_profile
+
+    # No cache configured → compute inline, nothing to coordinate.
+    if cache_path is None or lock_path is None:
+        logger.info("Estimating slide-level illumination profile...")
+        return estimate_illumination_profile(all_channel_data)
+
+    while True:
+        if _try_acquire_compute_lock(lock_path):
+            try:
+                logger.info("Estimating slide-level illumination profile...")
+                profile = estimate_illumination_profile(all_channel_data)
+                try:
+                    profile.save(cache_path, metadata=cache_meta)
+                    logger.info("Saved flat-field profile cache: %s", cache_path.name)
+                except OSError as exc:
+                    logger.warning("Could not write flat-field cache %s: %s", cache_path, exc)
+                return profile
+            finally:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+        # Lock held by another process — wait for the cache to land.
+        logger.info(
+            "Flat-field profile is being computed by another process (lock=%s). Waiting...",
+            lock_path.name,
+        )
+        _wait_for_compute(cache_path, lock_path)
+        profile = _load_flat_field_cache(cache_path, cache_meta)
+        if profile is not None:
+            logger.info(
+                "Loaded flat-field profile written by another shard (%d channels).",
+                len(profile.grids),
+            )
+            return profile
+        # Wait exited without a cache — other shard likely crashed and the
+        # stale lock was removed. Loop back and retry the acquire so only one
+        # of the waiters recomputes.
 
 
 def _flat_field_cache_meta(args, all_channel_data: dict) -> dict:
@@ -235,7 +263,10 @@ def _load_flat_field_cache(cache_path: Path | None, expected_meta: dict):
         return None
     try:
         profile, cached_meta = IlluminationProfile.load(cache_path)
-    except (ValueError, OSError, KeyError) as exc:
+    except (ValueError, OSError, KeyError, zipfile.BadZipFile, EOFError) as exc:
+        # Covers: algorithm_version mismatch (ValueError), missing npz key
+        # (KeyError), truncated/corrupted file (BadZipFile/EOFError), FS errors
+        # (OSError). Any of these means we should recompute rather than crash.
         logger.info("Flat-field cache at %s unreadable (%s) — recomputing.", cache_path.name, exc)
         return None
     for key in (

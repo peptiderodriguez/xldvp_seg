@@ -105,6 +105,8 @@ Local: `xlseg detect --czi-path ... --cell-type cell --channel-spec "..." --all-
 
 **Checkpoints:** per-tile dirs → merge shards → dedup → post-dedup (contours + features + bg) → finalize (JSON/CSV/HTML).
 
+**Flat-field profile cache** (`<slide_output_dir>/flat_field_profile.npz`): the slide-wide illumination estimate (~1-2h on 5-channel whole-mouse) is cached on first run and reused by `--resume` + all `--tile-shard` workers. Cache-key includes CZI `(path, mtime, size)` + channel list + slide shape + `photobleaching_correction` flag + `ALGORITHM_VERSION` — any change invalidates. POSIX `O_CREAT|O_EXCL` advisory lock (`flat_field_profile.computing`) ensures exactly one shard recomputes on cold start; others wait and load. 3h stale-lock recovery guards against crashed computes. Disable caching by passing `--no-normalize-features` (which skips flat-field entirely).
+
 ### Phase 3 — Annotation & Classification
 Serve HTML viewer → annotate yes/no → train RF → score. Feature sets: `morph` (78D), `morph_sam2` (334D), `channel_stats`, `all` (6,478D).
 
@@ -275,6 +277,7 @@ python run_segmentation.py --czi-path slide.czi --cell-type nmj \
 | SAM2 `_orig_hw` | `img_h, img_w = sam2_predictor._orig_hw[0]` (list of tuple) |
 | HDF5 LZ4 error | `import hdf5plugin` before `h5py` |
 | Network mount timeout | Socket timeout 60s automatic. Check with `ls /mnt/x/` |
+| `"upsample_linear1d_out_frame" not implemented for BFloat16` (zero detections, clean exit) | Cellpose 4.x defaults `use_bfloat16=True`; torch <2.3 lacks that kernel. `xldvp_seg.utils.device.cellpose_supports_bfloat16()` version-gates it — should never surface on this env. Watch for it if the env's torch version changes. |
 
 ---
 
