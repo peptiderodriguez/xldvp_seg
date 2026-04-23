@@ -128,6 +128,21 @@ def main():
     else:
         X = X_valid
 
+        # Phase 4a: arity guard — if a legacy Pipeline's sidecar feature-name
+        # file is missing and load_rf_classifier fell back to generic names,
+        # X.shape[1] can mismatch pipeline.n_features_in_. Fail fast with a
+        # useful message instead of an opaque sklearn ValueError mid-scoring.
+        expected_arity = getattr(pipeline, "n_features_in_", None)
+        if expected_arity is not None and expected_arity != X.shape[1]:
+            from xldvp_seg.exceptions import ClassificationError
+
+            raise ClassificationError(
+                f"Classifier expects {expected_arity} features but detections "
+                f"produced {X.shape[1]}. Feature-name sidecar likely missing "
+                f"or drifted. Retrain on current pipeline output or restore "
+                f"the sidecar at: {clf_path.with_suffix('.features.txt')}"
+            )
+
         # Score — handle edge case where classifier has only 1 class
         proba = pipeline.predict_proba(X)
         if proba.shape[1] == 1:

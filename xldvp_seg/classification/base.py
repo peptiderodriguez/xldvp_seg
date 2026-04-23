@@ -13,6 +13,8 @@ _coerce_value() and _compute_derived_features() for type-specific behavior.
 from __future__ import annotations
 
 import abc
+import pickle
+import struct
 from pathlib import Path
 from typing import Any
 
@@ -276,7 +278,21 @@ class BaseVesselClassifier(abc.ABC):
 
         try:
             model_data = joblib.load(path)
-        except (EOFError, ModuleNotFoundError) as e:
+        except (
+            EOFError,
+            ModuleNotFoundError,
+            AttributeError,
+            KeyError,
+            ValueError,
+            IndexError,
+            OSError,
+            pickle.UnpicklingError,
+            struct.error,
+        ) as e:
+            # Broaden from (EOFError, ModuleNotFoundError): corrupted /
+            # truncated joblib blobs raise UnpicklingError, KeyError,
+            # AttributeError, etc. Wrap all as ClassificationError so callers
+            # see a domain exception, not an opaque sklearn traceback.
             raise ClassificationError(f"Failed to load classifier from {path}: {e}") from e
 
         if not isinstance(model_data, dict):

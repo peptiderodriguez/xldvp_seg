@@ -84,23 +84,26 @@ def load_features_and_annotations(detections_path, annotations_path, feature_set
     matched_pos = 0
     matched_neg = 0
 
-    # First pass: determine which features are scalar (not lists/arrays)
-    sample_det = None
+    # Phase 4a: union-scan ≥10 detections with features. Using only the
+    # first non-empty detection was buggy when that detection was partial
+    # (failed bg correction) — full-feature detections downstream would be
+    # silently truncated for 6,478-dim "all" feature set. Mirror the
+    # classify_markers.py pattern.
+    all_feature_union: dict[str, type] = {}
+    probed = 0
     for det in detections:
-        if det.get("features"):
-            sample_det = det
+        feats = det.get("features")
+        if not feats:
+            continue
+        probed += 1
+        for k, v in feats.items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                all_feature_union.setdefault(k, type(v))
+        if probed >= 10:
             break
 
-    if sample_det:
-        all_features = sample_det.get("features", {})
-        # Only keep scalar features (exclude bbox, embeddings stored as lists, etc.)
-        all_scalar_names = sorted(
-            [
-                k
-                for k, v in all_features.items()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)
-            ]
-        )
+    if all_feature_union:
+        all_scalar_names = sorted(all_feature_union.keys())
         feature_names = filter_feature_names(all_scalar_names, feature_set)
         logger.info(
             "Feature set '%s': %d features (from %d total scalar)",

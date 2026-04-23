@@ -230,6 +230,8 @@ def load_rf_classifier(model_path: str) -> dict:
         ``'raw_meta'`` (dict).
     """
     import json as _json
+    import pickle
+    import struct
     from pathlib import Path as _Path
 
     import joblib
@@ -237,7 +239,21 @@ def load_rf_classifier(model_path: str) -> dict:
 
     try:
         model_data = joblib.load(model_path)
-    except (EOFError, ModuleNotFoundError, FileNotFoundError) as e:
+    except (
+        EOFError,
+        ModuleNotFoundError,
+        FileNotFoundError,
+        AttributeError,
+        KeyError,
+        ValueError,
+        IndexError,
+        OSError,
+        pickle.UnpicklingError,
+        struct.error,
+    ) as e:
+        # Broaden catch: corrupted / truncated joblib blobs raise a range of
+        # exception classes (UnpicklingError, KeyError, etc.). Wrap all as
+        # DataLoadError so callers can handle uniformly.
         raise DataLoadError(f"Failed to load classifier from {model_path}: {e}") from e
 
     if not isinstance(model_data, (dict, Pipeline)):
