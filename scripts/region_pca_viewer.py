@@ -106,6 +106,12 @@ def parse_args(argv=None):
     )
     parser.add_argument("--nuc-stats", help="Pre-computed region_nuc_stats.json for sidebar info")
     parser.add_argument("--output", required=True, help="Output HTML path")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible PCA/UMAP/k-means/Leiden (default: module default 42 + warning)",
+    )
     return parser.parse_args(argv)
 
 
@@ -557,6 +563,7 @@ def main():
             args.max_k,
             args.max_points_plot,
             rng,
+            seed=args.seed,
             var_cutoff=args.var_cutoff,
             max_pcs=args.max_pcs,
             umap_neighbors=args.umap_neighbors,

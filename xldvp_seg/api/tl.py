@@ -25,6 +25,7 @@ from sklearn.model_selection import cross_val_score
 
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.seeding import resolve_seed
 
 if TYPE_CHECKING:
     from xldvp_seg.core.slide_analysis import SlideAnalysis
@@ -244,15 +245,20 @@ def train(
         raise ConfigError("No annotated detections found matching the detections file.")
 
     # Train RF directly — no scaler needed (RF is invariant to monotonic transforms)
+
+    _rs = resolve_seed(kwargs.get("seed"), caller="tl.train")
     rf = RandomForestClassifier(
         n_estimators=kwargs.get("n_estimators", 200),
         max_depth=kwargs.get("max_depth", 20),
-        random_state=42,
+        random_state=_rs,
         n_jobs=-1,
     )
 
-    # CV on the bare RF — this is exactly what gets saved, so scores match
-    cv_scores = cross_val_score(rf, X, y, cv=5, scoring="f1")
+    # CV on the bare RF — use StratifiedKFold with shuffle so seed matters.
+    from sklearn.model_selection import StratifiedKFold
+
+    _cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=_rs)
+    cv_scores = cross_val_score(rf, X, y, cv=_cv, scoring="f1")
     logger.info("5-fold CV F1: %.3f +/- %.3f", cv_scores.mean(), cv_scores.std())
 
     # Fit on all data

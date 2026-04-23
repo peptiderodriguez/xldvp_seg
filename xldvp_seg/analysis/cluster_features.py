@@ -25,6 +25,7 @@ import numpy as np
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load, sanitize_for_json
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.seeding import resolve_seed
 
 logger = get_logger(__name__)
 
@@ -72,6 +73,9 @@ class ClusteringConfig:
     subcluster_min_size: int = 50
     subcluster_input: str | None = None
     pca_variance: float = 0.95
+    seed: int | None = (
+        None  # Phase 3: reproducibility seed; None -> default 42 with one-shot UserWarning
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +845,9 @@ def _reduce_dimensions(X_scaled, args):
             X_scaled.shape[1],
             pca_target * 100,
         )
-        pca = PCA(n_components=pca_target, random_state=42)
+
+        _rs = resolve_seed(getattr(args, "seed", None), caller="cluster_features")
+        pca = PCA(n_components=pca_target, random_state=_rs)
         X_umap = pca.fit_transform(X_scaled)
         total_var = pca.explained_variance_ratio_.sum()
         if total_var < pca_target:
@@ -878,7 +884,7 @@ def _reduce_dimensions(X_scaled, args):
             n_neighbors=args.n_neighbors,
             min_dist=args.min_dist,
             n_components=2,
-            random_state=42,
+            random_state=_rs,
             n_jobs=n_jobs,
             low_memory=True,
         )
@@ -897,7 +903,7 @@ def _reduce_dimensions(X_scaled, args):
         tsne = TSNE(
             perplexity=args.perplexity,
             max_iter=args.tsne_n_iter,
-            random_state=42,
+            random_state=_rs,
             n_jobs=n_jobs,
         )
         tsne_embedding = tsne.fit_transform(X_umap)
@@ -932,7 +938,14 @@ def _cluster_and_label(
 
         adata_tmp = ad.AnnData(X=cluster_embedding)
         sc.pp.neighbors(adata_tmp, n_neighbors=args.n_neighbors, use_rep="X")
-        sc.tl.leiden(adata_tmp, resolution=args.resolution, random_state=42)
+
+        sc.tl.leiden(
+            adata_tmp,
+            resolution=args.resolution,
+            random_state=resolve_seed(
+                getattr(args, "seed", None), caller="cluster_features.leiden"
+            ),
+        )
         labels = adata_tmp.obs["leiden"].astype(int).values
         n_clusters = len(set(labels))
         n_noise = 0
@@ -1851,6 +1864,7 @@ def run_subclustering(
     subcluster_min_size=50,
     n_neighbors=30,
     min_dist=0.1,
+    seed: int | None = None,
 ):
     """Sub-cluster each parent cluster by appearance features (morph+sam2).
 
@@ -1946,18 +1960,22 @@ def run_subclustering(
 
         # PCA if many features (SAM2 alone is 256D)
         n_features = X_scaled.shape[1]
+
+        _sub_rs = resolve_seed(seed, caller="run_subclustering")
         if n_features > 50:
             from sklearn.decomposition import PCA
 
             n_comp = min(50, X_scaled.shape[0] - 1, n_features)
-            pca = PCA(n_components=n_comp, random_state=42)
+            pca = PCA(n_components=n_comp, random_state=_sub_rs)
             X_scaled = pca.fit_transform(X_scaled)
             var_expl = pca.explained_variance_ratio_.sum() * 100
             logger.info("  PCA: %d -> %d dims (%.1f%% variance)", n_features, n_comp, var_expl)
 
         # UMAP
         n_nbrs = min(n_neighbors, len(X_scaled) - 1)
-        reducer = umap.UMAP(n_neighbors=n_nbrs, min_dist=min_dist, n_components=2, random_state=42)
+        reducer = umap.UMAP(
+            n_neighbors=n_nbrs, min_dist=min_dist, n_components=2, random_state=_sub_rs
+        )
         embedding = reducer.fit_transform(X_scaled)
 
         # HDBSCAN

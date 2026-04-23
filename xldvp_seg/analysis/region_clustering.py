@@ -33,6 +33,7 @@ from sklearn.preprocessing import StandardScaler
 
 from xldvp_seg.analysis.cluster_features import _extract_feature_matrix
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.seeding import resolve_seed
 
 logger = get_logger(__name__)
 
@@ -52,7 +53,8 @@ def hopkins_statistic(X, n_samples=None, rng=None):
         Hopkins statistic in ``[0, 1]``.
     """
     if rng is None:
-        rng = np.random.default_rng(42)
+
+        rng = np.random.default_rng(resolve_seed(None, caller="region_clustering"))
     n, d = X.shape
     if n_samples is None:
         n_samples = min(200, max(10, n // 2))
@@ -94,7 +96,8 @@ def find_optimal_k_elbow(X, max_k=8, rng=None):
            silhouette_per_k, inertia_per_k)``.
     """
     if rng is None:
-        rng = np.random.default_rng(42)
+
+        rng = np.random.default_rng(resolve_seed(None, caller="region_clustering"))
     n = X.shape[0]
     max_k = min(max_k, n - 1)
     if max_k < 2:
@@ -113,7 +116,13 @@ def find_optimal_k_elbow(X, max_k=8, rng=None):
         fit_X = X[idx]
 
     for k in range(2, max_k + 1):
-        km = KMeans(n_clusters=k, n_init=5, random_state=42, max_iter=100)
+
+        km = KMeans(
+            n_clusters=k,
+            n_init=5,
+            random_state=resolve_seed(None, caller="find_optimal_k_elbow"),
+            max_iter=100,
+        )
         if n > 10000:
             km.fit(fit_X)
             labels = km.predict(X)
@@ -231,6 +240,7 @@ def process_region(
     max_points_plot=5000,
     rng=None,
     *,
+    seed: int | None = None,
     var_cutoff=0.90,
     max_pcs=50,
     umap_neighbors=15,
@@ -256,7 +266,8 @@ def process_region(
     from umap import UMAP
 
     if rng is None:
-        rng = np.random.default_rng(42)
+
+        rng = np.random.default_rng(resolve_seed(None, caller="region_clustering"))
 
     X, _, _ = _extract_feature_matrix(detections, feature_names)
     if X is None or X.shape[0] < 50:
@@ -274,7 +285,13 @@ def process_region(
 
     # PCA — enough components to hit var_cutoff
     full_max = min(X_scaled.shape[0] - 1, X_scaled.shape[1])
-    pca_full = PCA(n_components=full_max, random_state=42)
+
+    _rc_rs = resolve_seed(seed, caller="region_clustering.process_region")
+    # If caller didn't supply rng, build one from the resolved seed so
+    # subsampling is reproducible too.
+    if rng is None:
+        rng = np.random.default_rng(_rc_rs)
+    pca_full = PCA(n_components=full_max, random_state=_rc_rs)
     pca_full.fit(X_scaled)
     cumvar = np.cumsum(pca_full.explained_variance_ratio_)
     n_for_cutoff = int(np.searchsorted(cumvar, var_cutoff) + 1)
@@ -313,7 +330,7 @@ def process_region(
         n_components=2,
         n_neighbors=n_neighbors,
         min_dist=umap_min_dist,
-        random_state=42,
+        random_state=_rc_rs,
         n_jobs=1,
     )
     X_umap = umap.fit_transform(X_pca_sub)

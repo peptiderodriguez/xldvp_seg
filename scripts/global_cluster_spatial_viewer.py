@@ -146,6 +146,12 @@ def parse_args(argv=None):
         default=None,
         help="Optional fallback pre-rendered dendrogram PNG if linkage-matrix unavailable.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible PCA / UMAP / Leiden (default: 42)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -1176,7 +1182,7 @@ def main():
 
     # --- PCA ---
     full_max = min(X_scaled.shape[0] - 1, X_scaled.shape[1])
-    pca_full = PCA(n_components=full_max, random_state=42)
+    pca_full = PCA(n_components=full_max, random_state=args.seed)
     pca_full.fit(X_scaled)
     cumvar = np.cumsum(pca_full.explained_variance_ratio_)
     n_for_cutoff = int(np.searchsorted(cumvar, args.var_cutoff) + 1)
@@ -1197,7 +1203,7 @@ def main():
         n_components=2,
         n_neighbors=args.umap_neighbors,
         min_dist=args.umap_min_dist,
-        random_state=42,
+        random_state=args.seed,
         low_memory=True,  # spill intermediate matrices to disk if needed
         n_jobs=-1,
     )
@@ -1215,7 +1221,10 @@ def main():
     # --- 4 clusterings ---
     # Leiden on full kNN graph (scales via pynndescent)
     labels_leiden = leiden_on_knn_graph(
-        X_pca, n_neighbors=args.leiden_knn, resolution=args.leiden_resolution
+        X_pca,
+        n_neighbors=args.leiden_knn,
+        resolution=args.leiden_resolution,
+        seed=args.seed,
     )
 
     # K-means with elbow — on full PCA

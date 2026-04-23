@@ -26,6 +26,7 @@ import numpy as np
 from xldvp_seg.exceptions import ConfigError
 from xldvp_seg.utils.detection_utils import extract_feature_matrix, extract_positions_um
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.seeding import resolve_seed
 
 logger = get_logger(__name__)
 
@@ -78,7 +79,7 @@ def _run_umap(X, fit_idx, all_idx, n_neighbors=30, min_dist=0.1, metric="euclide
         min_dist=min_dist,
         n_components=2,
         metric=metric,
-        random_state=42,
+        random_state=resolve_seed(None, caller="spatial_network.umap"),
         n_jobs=n_jobs,
         low_memory=True,
     )
@@ -682,7 +683,10 @@ def run_spatial_network(
     # and Louvain groups by high weight, which would invert the spatial semantics.
     logger.info("Running Louvain community detection...")
     try:
-        communities = nx.community.louvain_communities(G, weight=None, seed=42)
+
+        communities = nx.community.louvain_communities(
+            G, weight=None, seed=resolve_seed(None, caller="spatial_network.louvain")
+        )
         non_trivial = sum(1 for c in communities if len(c) > 1)
         logger.info("  Found %d communities (%d with 2+ cells)", len(communities), non_trivial)
         for comm_id, comm_nodes in enumerate(communities):

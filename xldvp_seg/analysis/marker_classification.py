@@ -28,6 +28,7 @@ from xldvp_seg.analysis.background import (
 )
 from xldvp_seg.exceptions import ConfigError, DataLoadError
 from xldvp_seg.utils.logging import get_logger
+from xldvp_seg.utils.seeding import resolve_seed
 
 logger = get_logger(__name__)
 
@@ -126,6 +127,7 @@ def classify_gmm(
     values: np.ndarray,
     posterior_threshold: float = 0.75,
     include_zeros: bool = False,
+    seed: int | None = None,
 ) -> tuple[float, np.ndarray]:
     """2-component GMM on log1p intensities with BIC model selection.
 
@@ -169,8 +171,10 @@ def classify_gmm(
         return 0.0, np.zeros(len(values), dtype=bool)
 
     # BIC model selection: prefer 1-component if data is unimodal
-    gmm1 = GaussianMixture(n_components=1, random_state=42).fit(log_vals)
-    gmm2 = GaussianMixture(n_components=2, random_state=42, max_iter=200).fit(log_vals)
+
+    rs = resolve_seed(seed, caller="classify_gmm")
+    gmm1 = GaussianMixture(n_components=1, random_state=rs).fit(log_vals)
+    gmm2 = GaussianMixture(n_components=2, random_state=rs, max_iter=200).fit(log_vals)
     # BIC delta of 6 ≈ "strong" evidence on the Kass & Raftery (1995) scale
     # (JASA 90:773-795). Balances false negatives vs false positives.
     if gmm1.bic(log_vals) - gmm2.bic(log_vals) < 6:

@@ -73,6 +73,12 @@ def parse_args(argv=None):
     parser.add_argument("--max-k", type=int, default=8)
     parser.add_argument("--max-points-plot", type=int, default=5000)
     parser.add_argument("--output", required=True, help="Output HTML path")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible clustering (default: module default 42 + warning)",
+    )
     return parser.parse_args(argv)
 
 
@@ -713,6 +719,7 @@ def main():
             args.max_k,
             args.max_points_plot,
             rng,
+            seed=args.seed,
             var_cutoff=args.var_cutoff,
             max_pcs=args.max_pcs,
             umap_neighbors=args.umap_neighbors,

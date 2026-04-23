@@ -791,14 +791,17 @@ def run_pipeline(args):
             # Subsample HTML by fraction if configured
             _html_frac = args.html_sample_fraction
             if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
-                import random
-
                 target = max(100, int(len(all_detections) * _html_frac))
                 if len(all_samples) > target:
                     logger.info(
                         f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target}"
                     )
-                    all_samples = random.sample(all_samples, target)
+                    # Phase 3: use numpy Generator seeded by --random-seed
+                    # instead of random.sample which ignored the user's seed.
+                    _rng = np.random.default_rng(getattr(args, "random_seed", 42))
+                    all_samples = [
+                        all_samples[i] for i in _rng.choice(len(all_samples), target, replace=False)
+                    ]
 
             # Run the same post-processing as the normal path (HTML export, CSV, summary)
             _finish_pipeline(
@@ -1000,15 +1003,17 @@ def run_pipeline(args):
         # ---- Subsample HTML samples by fraction (after dedup, before export) ----
         _html_frac = args.html_sample_fraction
         if _html_frac > 0 and len(all_samples) > 0 and len(all_detections) > 0:
-            import random
-
             target = max(100, int(len(all_detections) * _html_frac))
             if len(all_samples) > target:
                 logger.info(
                     f"HTML sample fraction {_html_frac}: subsampling {len(all_samples)} -> {target} "
                     f"({_html_frac*100:.0f}% of {len(all_detections)} detections)"
                 )
-                all_samples = random.sample(all_samples, target)
+                # Phase 3: use numpy Generator seeded by --random-seed.
+                _rng = np.random.default_rng(getattr(args, "random_seed", 42))
+                all_samples = [
+                    all_samples[i] for i in _rng.choice(len(all_samples), target, replace=False)
+                ]
 
         # ---- Shared post-processing: CSV, JSON, HTML, summary, server ----
         _finish_pipeline(
