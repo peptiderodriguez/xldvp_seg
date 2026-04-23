@@ -53,7 +53,9 @@ def build_cache_meta(
 
     Any input that changes the tissue-filter output must appear here — otherwise
     a stale cache from a different configuration could load and produce the
-    wrong tile list. See the top-level cache design comment.
+    wrong tile list. ``scene`` is included because multi-scene CZIs can have
+    coincidentally-identical slide_shape across scenes (e.g. multi-well plates
+    where each well is a scene) but different pixel data.
     """
     czi_path_str = str(getattr(args, "czi_path", ""))
     czi_mtime: float = 0.0
@@ -65,10 +67,14 @@ def build_cache_meta(
             czi_size = int(st.st_size)
     except OSError:
         pass
+    # `or 0` guards against args.scene being explicitly None (hand-built
+    # SimpleNamespace in tests); argparse always gives an int default of 0.
+    scene = getattr(args, "scene", 0) or 0
     return {
         "czi_path": czi_path_str,
         "czi_mtime": czi_mtime,
         "czi_size": czi_size,
+        "scene": int(scene),
         "tile_size": int(args.tile_size),
         "tile_overlap": float(args.tile_overlap),
         "tissue_channel": int(tissue_channel),
@@ -79,17 +85,19 @@ def build_cache_meta(
     }
 
 
-def load(cache_path: Path | None, expected_meta: dict):
+def load(cache_path: Path | None, expected_meta: dict) -> tuple[float, list[dict]] | None:
     """Return ``(variance_threshold, tissue_tiles)`` from cache, or ``None``.
 
     Mismatched metadata (different CZI, tile size, channel, etc.) is treated
     as a miss. Corrupt JSON is caught and treated as a miss so a partial write
-    from a crashed peer doesn't propagate upward as an exception.
+    from a crashed peer doesn't propagate upward as an exception. Payload
+    fields of the wrong type (e.g. hand-edited JSON) are also treated as
+    misses rather than raising downstream.
     """
     if cache_path is None or not Path(cache_path).exists():
         return None
     try:
-        payload = fast_json_load(str(cache_path))
+        payload = fast_json_load(cache_path)
     except (ValueError, OSError) as exc:
         logger.info("Tissue cache at %s unreadable (%s) — recomputing.", cache_path, exc)
         return None
@@ -100,6 +108,7 @@ def load(cache_path: Path | None, expected_meta: dict):
     for key in (
         "czi_path",
         "czi_size",
+        "scene",
         "tile_size",
         "tile_overlap",
         "tissue_channel",
@@ -108,11 +117,17 @@ def load(cache_path: Path | None, expected_meta: dict):
         "n_all_tiles",
         "algorithm_version",
     ):
-        if cached_meta.get(key) != expected_meta.get(key):
+        # Back-compat: caches written before `scene` joined the cache key were
+        # always implicitly scene=0 (single-scene was the only mode that wrote
+        # a cache). Treat missing scene as 0 so a post-upgrade merge / resume
+        # against an already-populated cache doesn't re-invalidate. Remove this
+        # shim after a few releases when no pre-scene caches remain in the wild.
+        cached_val = cached_meta.get(key, 0) if key == "scene" else cached_meta.get(key)
+        if cached_val != expected_meta.get(key):
             logger.info(
                 "Tissue cache stale: %s differs (cached=%r, current=%r). Recomputing.",
                 key,
-                cached_meta.get(key),
+                cached_val,
                 expected_meta.get(key),
             )
             return None
@@ -124,7 +139,16 @@ def load(cache_path: Path | None, expected_meta: dict):
     if threshold is None or tiles is None:
         logger.info("Tissue cache at %s missing payload fields — recomputing.", cache_path)
         return None
-    return float(threshold), list(tiles)
+    # Guard against hand-edited JSON where threshold is a list/dict or tiles is
+    # a scalar — pure-JSON shapes that pass the None check but crash float()/
+    # list iteration downstream.
+    try:
+        threshold_f = float(threshold)
+        tiles_list = list(tiles)
+    except (TypeError, ValueError) as exc:
+        logger.info("Tissue cache payload has wrong value types (%s) — recomputing.", exc)
+        return None
+    return threshold_f, tiles_list
 
 
 def save(
@@ -138,6 +162,10 @@ def save(
     Uses ``atomic_json_dump`` (tmp file + rename) so a killed process can't
     leave a truncated JSON behind.
     """
+    # Persist only x/y: detection_loop adds w/h from args.tile_size at submission
+    # time (see detection_loop.py:600 "Worker expects 'x', 'y', 'w', 'h'"), so
+    # keeping any extras in the cache would be dead weight and couple the cache
+    # schema to the full tile-dict shape.
     payload = {
         "__meta__": metadata,
         "variance_threshold": float(variance_threshold),

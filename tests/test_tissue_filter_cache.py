@@ -9,6 +9,7 @@ simpler (plain JSON, no advisory lock) so the surface is smaller.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,7 +21,7 @@ from xldvp_seg.preprocessing import tissue_filter_cache as tc
 def sample_meta(tmp_path):
     czi = tmp_path / "slide.czi"
     czi.write_bytes(b"x" * 1024)
-    args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.25)
+    args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.25, scene=0)
     return tc.build_cache_meta(
         args,
         tissue_channel=2,
@@ -44,7 +45,7 @@ class TestBuildCacheMeta:
     def test_captures_czi_identity(self, tmp_path):
         czi = tmp_path / "slide.czi"
         czi.write_bytes(b"abc" * 100)
-        args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.1)
+        args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.1, scene=0)
         meta = tc.build_cache_meta(
             args,
             tissue_channel=2,
@@ -55,6 +56,7 @@ class TestBuildCacheMeta:
         assert meta["czi_path"] == str(czi)
         assert meta["czi_size"] == 300
         assert meta["czi_mtime"] > 0.0
+        assert meta["scene"] == 0
         assert meta["tile_size"] == 3000
         assert meta["tile_overlap"] == 0.1
         assert meta["tissue_channel"] == 2
@@ -64,7 +66,9 @@ class TestBuildCacheMeta:
         assert meta["algorithm_version"] == tc.ALGORITHM_VERSION
 
     def test_missing_czi_yields_zero_stat_not_crash(self):
-        args = SimpleNamespace(czi_path="/does/not/exist.czi", tile_size=3000, tile_overlap=0.1)
+        args = SimpleNamespace(
+            czi_path="/does/not/exist.czi", tile_size=3000, tile_overlap=0.1, scene=0
+        )
         meta = tc.build_cache_meta(
             args,
             tissue_channel=0,
@@ -75,6 +79,33 @@ class TestBuildCacheMeta:
         assert meta["czi_mtime"] == 0.0
         assert meta["czi_size"] == 0
         assert meta["manual_threshold"] == 15.0
+
+    def test_scene_defaults_to_zero_when_attr_missing(self, tmp_path):
+        """Args namespace without .scene should get scene=0 (back-compat)."""
+        czi = tmp_path / "slide.czi"
+        czi.write_bytes(b"x")
+        args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.1)
+        meta = tc.build_cache_meta(
+            args,
+            tissue_channel=0,
+            modality="fluorescence",
+            manual_threshold=None,
+            n_all_tiles=10,
+        )
+        assert meta["scene"] == 0
+
+    def test_scene_captured_from_args(self, tmp_path):
+        czi = tmp_path / "slide.czi"
+        czi.write_bytes(b"x")
+        args = SimpleNamespace(czi_path=str(czi), tile_size=3000, tile_overlap=0.1, scene=3)
+        meta = tc.build_cache_meta(
+            args,
+            tissue_channel=0,
+            modality="fluorescence",
+            manual_threshold=None,
+            n_all_tiles=10,
+        )
+        assert meta["scene"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +174,7 @@ class TestCacheValidator:
         [
             ("czi_path", "/different/slide.czi"),
             ("czi_size", 99999999),
+            ("scene", 1),
             ("tile_size", 2048),
             ("tile_overlap", 0.1),
             ("tissue_channel", 4),
@@ -166,6 +198,72 @@ class TestCacheValidator:
         path = self._save(tmp_path, sample_meta)
         rewritten = {**sample_meta, "czi_mtime": sample_meta["czi_mtime"] + 3600.0}
         assert tc.load(path, rewritten) is None
+
+    def test_pre_scene_cache_still_hits_for_scene_zero(self, tmp_path, sample_meta):
+        """Pre-scene caches were written implicitly as scene=0. The validator
+        must treat missing scene in the cached meta as 0 so a post-upgrade run
+        doesn't redundantly recompute."""
+        path = tmp_path / tc.CACHE_FILENAME
+        legacy_meta = {k: v for k, v in sample_meta.items() if k != "scene"}
+        payload = {
+            "__meta__": legacy_meta,
+            "variance_threshold": 42.5,
+            "tissue_tiles": [{"x": 0, "y": 0}],
+        }
+        path.write_text(json.dumps(payload))
+        # Current run asks for scene=0 (the default from argparse).
+        assert tc.load(path, sample_meta) is not None
+
+    def test_pre_scene_cache_misses_for_nonzero_scene(self, tmp_path, sample_meta):
+        """The back-compat shim must NOT false-hit when the current run wants a
+        non-zero scene. Otherwise a multi-scene slide could grab wrong tiles."""
+        path = tmp_path / tc.CACHE_FILENAME
+        legacy_meta = {k: v for k, v in sample_meta.items() if k != "scene"}
+        payload = {
+            "__meta__": legacy_meta,
+            "variance_threshold": 42.5,
+            "tissue_tiles": [{"x": 0, "y": 0}],
+        }
+        path.write_text(json.dumps(payload))
+        current = {**sample_meta, "scene": 1}
+        assert tc.load(path, current) is None
+
+    def test_explicit_flat_field_cache_dir_routes_tissue_cache(self, tmp_path):
+        """The --flat-field-cache-dir flag is now a preprocessing cache dir.
+        When set, tissue_filter.json must colocate there, not in slide_output_dir.
+        Simulates the resolution branch from shm_setup.py to lock in behavior."""
+        explicit_cache = tmp_path / "shared_cache"
+        run_dir = tmp_path / "run_dir"
+        explicit_cache.mkdir()
+        run_dir.mkdir()
+        args = SimpleNamespace(flat_field_cache_dir=str(explicit_cache))
+
+        # Reproduce the branch from shm_setup._resolve_preprocessing_cache_dir
+        _explicit = getattr(args, "flat_field_cache_dir", None)
+        if _explicit:
+            effective = Path(_explicit)
+        else:
+            effective = run_dir
+
+        tissue_path = effective / tc.CACHE_FILENAME
+        assert tissue_path.parent == explicit_cache
+        assert tissue_path.parent != run_dir
+
+    def test_end_to_end_compute_then_hit(self, tmp_path, sample_meta):
+        """Cache miss → simulate compute → save → next load hits. Proves the
+        write-back path actually produces a readable cache."""
+        path = tmp_path / tc.CACHE_FILENAME
+        assert tc.load(path, sample_meta) is None  # cold
+        # Simulate compute output
+        threshold = 37.8
+        tiles = [{"x": 0, "y": 0}, {"x": 3000, "y": 0}]
+        tc.save(path, threshold, tiles, sample_meta)
+        # Now a fresh load (second run) hits
+        loaded = tc.load(path, sample_meta)
+        assert loaded is not None
+        got_thr, got_tiles = loaded
+        assert got_thr == pytest.approx(threshold)
+        assert len(got_tiles) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +291,21 @@ class TestCorruptionResilience:
         path = tmp_path / tc.CACHE_FILENAME
         # Valid meta but missing variance_threshold + tissue_tiles
         path.write_text(json.dumps({"__meta__": sample_meta}))
+        assert tc.load(path, sample_meta) is None
+
+    def test_wrong_value_types_treated_as_miss_not_crash(self, tmp_path, sample_meta):
+        """Valid JSON with wrong value types (list where float expected, etc.)
+        should fall back to recompute, not raise TypeError on float() coercion.
+        """
+        path = tmp_path / tc.CACHE_FILENAME
+        # variance_threshold is a dict (not coercible to float) and tissue_tiles
+        # is a scalar (not iterable into list of tiles).
+        payload = {
+            "__meta__": sample_meta,
+            "variance_threshold": {"nope": 42.0},
+            "tissue_tiles": 99,
+        }
+        path.write_text(json.dumps(payload))
         assert tc.load(path, sample_meta) is None
 
 

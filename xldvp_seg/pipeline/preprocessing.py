@@ -25,7 +25,7 @@ FLAT_FIELD_CACHE_FILENAME = "flat_field_profile.npz"
 FLAT_FIELD_LOCK_FILENAME = "flat_field_profile.computing"
 
 
-def apply_slide_preprocessing(args, all_channel_data, loader, *, slide_output_dir=None):
+def apply_slide_preprocessing(args, all_channel_data, loader, *, cache_dir=None):
     """Apply slide-wide preprocessing: photobleach correction, flat-field, Reinhard.
 
     Modifies all_channel_data and loader in-place.
@@ -35,10 +35,10 @@ def apply_slide_preprocessing(args, all_channel_data, loader, *, slide_output_di
               norm_params_file, channel)
         all_channel_data: dict of channel_idx -> 2D array (modified in place)
         loader: CZI loader (channel_data updated in place)
-        slide_output_dir: Where to read/write the flat-field profile cache. Pass
-            when available so multi-node shard runs and ``--resume`` reuses the
+        cache_dir: Where to read/write the flat-field profile cache. Pass when
+            available so multi-node shard runs and ``--resume`` reuses the
             ~1-2h slide-wide illumination estimate instead of recomputing it per
-            shard. Pass ``None`` to disable caching (single-node ephemeral runs).
+            shard. ``None`` disables caching (single-node ephemeral runs).
     """
     # RGB brightfield CZIs: skip all preprocessing.
     # Photobleach/flat-field/Reinhard are designed for 2D uint16 fluorescence and
@@ -55,9 +55,7 @@ def apply_slide_preprocessing(args, all_channel_data, loader, *, slide_output_di
 
     # Apply flat-field illumination correction (smooth out regional intensity gradients)
     if getattr(args, "normalize_features", True):
-        _apply_flat_field_correction(
-            args, all_channel_data, loader, slide_output_dir=slide_output_dir
-        )
+        _apply_flat_field_correction(args, all_channel_data, loader, cache_dir=cache_dir)
 
     # Apply Reinhard normalization if params file provided (whole-slide, before tiling)
     if getattr(args, "norm_params_file", None):
@@ -120,14 +118,14 @@ def _apply_photobleach_correction(args, all_channel_data, loader):
     logger.info("Photobleaching correction complete.")
 
 
-def _apply_flat_field_correction(args, all_channel_data, loader, *, slide_output_dir=None):
+def _apply_flat_field_correction(args, all_channel_data, loader, *, cache_dir=None):
     """Apply flat-field illumination correction to smooth regional intensity gradients.
 
-    When ``slide_output_dir`` is given, a cached ``flat_field_profile.npz`` in
-    that directory is used if its metadata (CZI path / mtime / size / channel
-    list / slide shape) matches the current run. Otherwise the profile is
-    computed fresh and written back to the cache for subsequent shards or
-    ``--resume`` runs to reuse.
+    When ``cache_dir`` is given, a cached ``flat_field_profile.npz`` in that
+    directory is used if its metadata (CZI identity / scene / channel list /
+    slide shape / photobleach flag) matches the current run. Otherwise the
+    profile is computed fresh and written back to the cache for subsequent
+    shards or ``--resume`` runs to reuse.
     """
     logger.info(f"\n{'='*70}")
     logger.info("FLAT-FIELD ILLUMINATION CORRECTION")
@@ -136,8 +134,8 @@ def _apply_flat_field_correction(args, all_channel_data, loader, *, slide_output
     cache_meta = _flat_field_cache_meta(args, all_channel_data)
     cache_path = None
     lock_path = None
-    if slide_output_dir is not None:
-        out_dir = Path(slide_output_dir)
+    if cache_dir is not None:
+        out_dir = Path(cache_dir)
         cache_path = out_dir / FLAT_FIELD_CACHE_FILENAME
         lock_path = out_dir / FLAT_FIELD_LOCK_FILENAME
 
@@ -240,10 +238,14 @@ def _flat_field_cache_meta(args, all_channel_data: dict) -> dict:
     except OSError:
         pass
     any_arr = next(iter(all_channel_data.values()))
+    # `or 0` guards against args.scene being explicitly None (hand-built
+    # SimpleNamespace in tests); argparse always gives an int default of 0.
+    scene = getattr(args, "scene", 0) or 0
     return {
         "czi_path": czi_path_str,
         "czi_mtime": czi_mtime,
         "czi_size": czi_size,
+        "scene": int(scene),
         "channels": sorted(int(c) for c in all_channel_data),
         "slide_shape": [int(s) for s in any_arr.shape[:2]],
         "photobleaching_correction": bool(getattr(args, "photobleaching_correction", False)),
@@ -272,15 +274,22 @@ def _load_flat_field_cache(cache_path: Path | None, expected_meta: dict):
     for key in (
         "czi_path",
         "czi_size",
+        "scene",
         "channels",
         "slide_shape",
         "photobleaching_correction",
     ):
-        if cached_meta.get(key) != expected_meta.get(key):
+        # Back-compat: pre-scene caches (written before scene was part of the
+        # cache key) were always implicitly scene=0 (single-scene was the only
+        # mode that ever reached the cache-write path). Treat missing as 0 so
+        # the currently-running job's already-written cache doesn't re-invalidate
+        # on a post-upgrade merge step. Remove this shim after a few releases.
+        cached_val = cached_meta.get(key, 0) if key == "scene" else cached_meta.get(key)
+        if cached_val != expected_meta.get(key):
             logger.info(
-                "Flat-field cache stale: %s differs " "(cached=%r, current=%r). Recomputing.",
+                "Flat-field cache stale: %s differs (cached=%r, current=%r). Recomputing.",
                 key,
-                cached_meta.get(key),
+                cached_val,
                 expected_meta.get(key),
             )
             return None

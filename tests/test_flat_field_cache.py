@@ -69,6 +69,7 @@ def sample_meta():
         "czi_path": "/fake/slide.czi",
         "czi_mtime": 1_700_000_000.0,
         "czi_size": 10_000_000,
+        "scene": 0,
         "channels": [0, 2],
         "slide_shape": [512, 768],
         "photobleaching_correction": False,
@@ -142,6 +143,7 @@ class TestCacheValidator:
         [
             ("czi_path", "/different/slide.czi"),
             ("czi_size", 99999999),
+            ("scene", 1),
             ("channels", [0, 2, 3]),
             ("slide_shape", [256, 768]),
             ("photobleaching_correction", True),
@@ -164,6 +166,29 @@ class TestCacheValidator:
         path = self._save(tmp_path, synthetic_profile, sample_meta)
         rewritten = {**sample_meta, "czi_mtime": sample_meta["czi_mtime"] + 3600.0}
         assert _load_flat_field_cache(path, rewritten) is None
+
+    def test_pre_scene_cache_still_hits_for_scene_zero(
+        self, tmp_path, synthetic_profile, sample_meta
+    ):
+        """Pre-scene caches (schema without 'scene' key) were written when scene
+        was always 0. A post-upgrade validator must treat them as scene=0 hits
+        so in-flight jobs don't redundantly recompute on merge/resume."""
+        path = tmp_path / FLAT_FIELD_CACHE_FILENAME
+        legacy_meta = {k: v for k, v in sample_meta.items() if k != "scene"}
+        synthetic_profile.save(path, metadata=legacy_meta)
+        # Current-run meta has scene=0 (the default). Must hit.
+        assert _load_flat_field_cache(path, sample_meta) is not None
+
+    def test_pre_scene_cache_misses_for_nonzero_scene(
+        self, tmp_path, synthetic_profile, sample_meta
+    ):
+        """The back-compat shim only applies to scene=0. A pre-scene cache must
+        NOT false-hit when the current run wants scene=1."""
+        path = tmp_path / FLAT_FIELD_CACHE_FILENAME
+        legacy_meta = {k: v for k, v in sample_meta.items() if k != "scene"}
+        synthetic_profile.save(path, metadata=legacy_meta)
+        current = {**sample_meta, "scene": 1}
+        assert _load_flat_field_cache(path, current) is None
 
 
 # ---------------------------------------------------------------------------
@@ -262,9 +287,7 @@ class TestLockReleasedOnCompute:
                 pass
 
         with pytest.raises(RuntimeError, match="simulated OOM"):
-            _apply_flat_field_correction(
-                args, synthetic_channels, FakeLoader(), slide_output_dir=tmp_path
-            )
+            _apply_flat_field_correction(args, synthetic_channels, FakeLoader(), cache_dir=tmp_path)
 
         # The whole point of this test: a subsequent shard must not be blocked.
         assert not lock_path.exists(), "lock must be released even when compute raises"
@@ -447,8 +470,8 @@ class TestFlatFieldCacheDirOverride:
 
         called_with = {}
 
-        def fake_apply(args, data, loader, *, slide_output_dir=None):
-            called_with["slide_output_dir"] = slide_output_dir
+        def fake_apply(args, data, loader, *, cache_dir=None):
+            called_with["cache_dir"] = cache_dir
 
         monkeypatch.setattr("xldvp_seg.pipeline.shm_setup.apply_slide_preprocessing", fake_apply)
         # We don't need to run the full setup_shared_memory — the branch under
@@ -457,9 +480,9 @@ class TestFlatFieldCacheDirOverride:
         args = SimpleNamespace(flat_field_cache_dir=str(cache_dir))
 
         # The exact snippet from shm_setup.py
-        flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
-        if flat_field_cache_dir:
-            effective = Path(flat_field_cache_dir)
+        _explicit = getattr(args, "flat_field_cache_dir", None)
+        if _explicit:
+            effective = Path(_explicit)
             effective.mkdir(parents=True, exist_ok=True)
         else:
             effective = run_dir
@@ -473,9 +496,9 @@ class TestFlatFieldCacheDirOverride:
         run_dir.mkdir()
         args = SimpleNamespace(flat_field_cache_dir=None)
 
-        flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
-        if flat_field_cache_dir:
-            effective = Path(flat_field_cache_dir)
+        _explicit = getattr(args, "flat_field_cache_dir", None)
+        if _explicit:
+            effective = Path(_explicit)
         else:
             effective = run_dir
 

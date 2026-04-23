@@ -35,13 +35,18 @@ def setup_shared_memory(
     """Create shared memory, load CZI channels, filter tissue tiles, and apply sampling.
 
     Encapsulates the following stages from run_pipeline():
+      - Output directory setup (timestamped or resume path) — resolved up front
+        so preprocessing caches know where to read/write
       - Channel assignment logging
       - SharedSlideManager creation + per-channel direct-to-SHM loading
-      - Slide-wide preprocessing (flat-field, photobleach) on SHM views
+      - Slide-wide preprocessing (flat-field + photobleach) on SHM views, with
+        ``flat_field_profile.npz`` caching per-slide (skips ~1-2h recompute on
+        reruns/resumes; honors ``--flat-field-cache-dir`` for cross-run sharing)
       - Tile grid generation
-      - Tissue threshold calibration and tissue tile filtering
+      - Tissue threshold calibration and tissue tile filtering, with
+        ``tissue_filter.json`` caching (skips ~3-4 min recompute; colocated
+        with the flat-field cache)
       - Tile sampling (sample_fraction) and deterministic sort
-      - Output directory setup (timestamped or resume path)
       - Multi-node shard tile list sharing and round-robin assignment
 
     Args:
@@ -182,19 +187,21 @@ def setup_shared_memory(
         # Build all_channel_data as views into SHM (for preprocessing, resume HTML, etc.)
         all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
 
-    # Apply slide-wide preprocessing on SHM views (modifies data in-place).
-    # Flat-field cache dir defaults to slide_output_dir (co-located with the
-    # run, scoped to it + its --resume siblings). If --flat-field-cache-dir is
-    # set, prefer that so the cache can be shared across detection runs with
-    # different --output-dir (e.g. parameter sweeps on the same CZI).
-    flat_field_cache_dir = getattr(args, "flat_field_cache_dir", None)
-    if flat_field_cache_dir:
-        flat_field_cache_dir = Path(flat_field_cache_dir)
-        flat_field_cache_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Flat-field cache: using shared dir {flat_field_cache_dir}")
+    # Resolve the slide-level preprocessing cache dir. Holds both
+    # flat_field_profile.npz and tissue_filter.json. Defaults to
+    # slide_output_dir (co-located with the run, scoped to it + its --resume
+    # siblings). If --flat-field-cache-dir (legacy name, now a preprocessing-
+    # cache dir) is set, prefer that so the cache can be shared across
+    # detection runs with different --output-dir — e.g. parameter sweeps on
+    # the same CZI skip the preprocessing work entirely.
+    _explicit_cache = getattr(args, "flat_field_cache_dir", None)
+    if _explicit_cache:
+        preprocessing_cache_dir = Path(_explicit_cache)
+        preprocessing_cache_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Preprocessing cache: using shared dir {preprocessing_cache_dir}")
     else:
-        flat_field_cache_dir = slide_output_dir
-    apply_slide_preprocessing(args, all_channel_data, loader, slide_output_dir=flat_field_cache_dir)
+        preprocessing_cache_dir = slide_output_dir
+    apply_slide_preprocessing(args, all_channel_data, loader, cache_dir=preprocessing_cache_dir)
 
     # Generate tile grid (using global coordinates)
     overlap = args.tile_overlap
@@ -223,8 +230,7 @@ def setup_shared_memory(
     # Lives in the same cache dir as the flat-field profile (slide_output_dir by
     # default, or --flat-field-cache-dir if set). Benefits brightfield equally
     # since the filter runs for both modalities.
-    tissue_cache_dir = flat_field_cache_dir  # resolved above
-    tissue_cache_path = tissue_cache_dir / tissue_cache.CACHE_FILENAME
+    tissue_cache_path = preprocessing_cache_dir / tissue_cache.CACHE_FILENAME
     tissue_cache_meta = tissue_cache.build_cache_meta(
         args,
         tissue_channel=tissue_channel,
