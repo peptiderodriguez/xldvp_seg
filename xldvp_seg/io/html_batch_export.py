@@ -27,7 +27,7 @@ import h5py
 import numpy as np
 from PIL import Image
 
-from xldvp_seg.io.html_utils import _esc, _js_esc
+from xldvp_seg.io.html_utils import _esc, _esc_js_in_attr, _js_esc
 from xldvp_seg.utils.logging import get_logger
 
 _logger = get_logger(__name__)
@@ -505,7 +505,9 @@ def generate_mk_hspc_page_html(
         global_y = sample.get("global_y", 0)
         # Always use spatial UID format for consistency across all cell types
         # Format: {slide}_{celltype}_{round(x)}_{round(y)}
-        uid = _esc(f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}")
+        uid_raw = f"{slide}_{cell_type}_{int(round(global_x))}_{int(round(global_y))}"
+        uid = _esc(uid_raw)
+        uid_js = _esc_js_in_attr(uid_raw)  # nested escape for onclick
         # Extract short slide name (e.g., "FGC1" from "2025_11_18_FGC1")
         short_slide = slide.split("_")[-1] if "_" in slide else slide
         display_id = _esc(
@@ -536,9 +538,9 @@ def generate_mk_hspc_page_html(
                         {score_html}
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
+                    <button class="btn btn-yes" onclick="setLabel(&quot;{uid_js}&quot;, 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel(&quot;{uid_js}&quot;, 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel(&quot;{uid_js}&quot;, 0)">N</button>
                 </div>
             </div>
         </div>

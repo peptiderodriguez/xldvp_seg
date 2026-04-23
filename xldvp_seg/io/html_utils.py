@@ -30,16 +30,32 @@ def _esc(value) -> str:
     return html_mod.escape(str(value), quote=True)
 
 
+def _esc_js_in_attr(value) -> str:
+    """Escape for JS-string-inside-HTML-attribute context (nested).
+
+    Use when a value is interpolated into ``onclick="fn(&quot;{x}&quot;, ...)"``
+    or similar. Defends against both JS-string break-out (via ``_js_esc``)
+    and HTML-attribute break-out (via ``_esc``).
+    """
+    return _esc(_js_esc(value))
+
+
 def _js_esc(value) -> str:
     """Escape a value for safe insertion into JavaScript string literals.
 
-    Uses json.dumps() which properly handles backslashes, newlines, quotes,
-    and Unicode for JS string context.  Returns the content WITHOUT
-    surrounding quotes — the caller provides those in the template.
+    Uses json.dumps() to handle backslashes, newlines, quotes, and Unicode
+    for JS string context. Returns the content WITHOUT surrounding quotes —
+    the caller provides those in the template.
+
+    Additionally escapes ``</`` and ``*/`` sequences. These can otherwise
+    break out of a <script> block OR a /* ... */ JS comment even when the
+    JS-string escape is correct — the browser's HTML parser scans for
+    ``</script>`` regardless of JS string context.
     """
     import json
 
-    return json.dumps(str(value))[1:-1]
+    escaped = json.dumps(str(value))[1:-1]
+    return escaped.replace("</", "<\\/").replace("*/", "*\\/")
 
 
 # Try to use LZ4 compression (faster than gzip), fallback to gzip

@@ -83,6 +83,31 @@ def main():
 
     path = Path(args.path).resolve()
 
+    # Phase 2.8: loudly flag when the server would expose a directory outside
+    # the typical pipeline output root. Not a hard sandbox — legit use cases
+    # exist — but the Cloudflare tunnel makes this public to the internet.
+    # E.3: narrow /var prefix — /var/tmp is a legit scratch location for
+    # some pipeline users; only flag sensitive subdirs explicitly.
+    _SUSPECT_PREFIXES = (
+        "/etc",
+        "/root",
+        "/var/log",
+        "/var/lib",
+        "/var/spool",
+        "/home",
+        "/usr",
+        "/bin",
+        "/boot",
+        "/sys",
+    )
+    if any(str(path).startswith(p + "/") or str(path) == p for p in _SUSPECT_PREFIXES):
+        print(
+            f"WARNING: --path {path} is outside the typical pipeline output tree. "
+            "The Cloudflare tunnel will expose this directory publicly on the "
+            "internet. Continue only if you intended this.",
+            file=sys.stderr,
+        )
+
     # Accept an HTML file — serve its parent directory
     if path.is_file():
         directory = path.parent
@@ -164,7 +189,13 @@ def main():
 
 
 def _write_server_info(directory, port, tunnel_url, http_pid=None):
-    """Write server info to a well-known file for programmatic URL retrieval."""
+    """Write server info to a well-known file for programmatic URL retrieval.
+
+    Phase 2.7: write with 0o600 perms so the Cloudflare tunnel URL is not
+    readable by other local users.
+    """
+    import os as _os
+
     info = {
         "directory": str(directory),
         "port": port,
@@ -173,7 +204,13 @@ def _write_server_info(directory, port, tunnel_url, http_pid=None):
         "http_pid": http_pid,
     }
     try:
-        _SERVER_INFO_FILE.write_text(json.dumps(info, indent=2))
+        fd = _os.open(
+            str(_SERVER_INFO_FILE),
+            _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC,
+            0o600,
+        )
+        with _os.fdopen(fd, "w") as f:
+            f.write(json.dumps(info, indent=2))
     except OSError:
         pass  # /tmp write failure is non-fatal
 

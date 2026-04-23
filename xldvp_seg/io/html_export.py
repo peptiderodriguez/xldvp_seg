@@ -27,6 +27,7 @@ from xldvp_seg.io.html_utils import (
     HDF5_COMPRESSION_KWARGS,
     HDF5_COMPRESSION_NAME,
     _esc,
+    _esc_js_in_attr,
     _js_esc,
     compose_tile_rgb,
     create_hdf5_dataset,
@@ -179,6 +180,10 @@ def generate_annotation_page(
     cards_html = ""
     for sample in samples:
         uid = _esc(sample["uid"])
+        # uid_js is double-escaped (JS string inside HTML attribute) for
+        # safe insertion into onclick="..." handlers. The outer template
+        # uses &quot; delimiters so the attribute can't be broken out.
+        uid_js = _esc_js_in_attr(sample["uid"])
         img_b64 = sample["image"]
         mime = sample.get("mime_type", "jpeg")
         if mime not in ("jpeg", "png"):
@@ -251,9 +256,9 @@ def generate_annotation_page(
                     <div class="card-stats">{stats_str}</div>
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
+                    <button class="btn btn-yes" onclick="setLabel(&quot;{uid_js}&quot;, 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel(&quot;{uid_js}&quot;, 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel(&quot;{uid_js}&quot;, 0)">N</button>
                 </div>
             </div>
         </div>
@@ -1104,7 +1109,6 @@ def generate_vessel_annotation_page(
     Returns:
         HTML string
     """
-    import json
 
     if title is None:
         title = cell_type.upper()
@@ -1136,12 +1140,17 @@ def generate_vessel_annotation_page(
             k: v for k, v in feat.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
         }
 
-    all_features_json = json.dumps(all_features)
+    # safe_json escapes </ and <!-- so a hostile UID can't terminate the
+    # <script> block where this is embedded (Phase 2.3 fix).
+    from xldvp_seg.visualization.encoding import safe_json
+
+    all_features_json = safe_json(all_features)
 
     # Build cards
     cards_html = ""
     for idx, sample in enumerate(samples):
         uid = _esc(sample["uid"])
+        uid_js = _esc_js_in_attr(sample["uid"])  # nested: JS string in HTML attr
         img_b64 = sample["image"]
         img_raw_b64 = sample.get("image_raw")  # Raw image without contours
         mime = sample.get("mime_type", "jpeg")
@@ -1195,11 +1204,18 @@ def generate_vessel_annotation_page(
                 <img src="data:image/{mime};base64,{img_b64}" alt="{uid}">
             </div>"""
 
+        # Phase 2.5: escape raw feature values before embedding in attrs.
+        diameter_val = feat.get("outer_diameter_um", 0)
+        try:
+            diameter_attr = f"{float(diameter_val):.4f}"
+        except (TypeError, ValueError):
+            diameter_attr = "0"
+        confidence_attr = _esc(str(feat.get("confidence", "unknown")))
         cards_html += f"""
         <div class="card" id="{uid}" data-label="-1"
-             data-diameter="{feat.get('outer_diameter_um', 0)}"
-             data-confidence="{feat.get('confidence', 'unknown')}">
-            <input type="checkbox" class="card-checkbox" onclick="event.stopPropagation(); toggleBatchSelect('{uid}')">
+             data-diameter="{diameter_attr}"
+             data-confidence="{confidence_attr}">
+            <input type="checkbox" class="card-checkbox" onclick="event.stopPropagation(); toggleBatchSelect(&quot;{uid_js}&quot;)">
             {img_container}
             <div class="card-info">
                 <div class="card-meta">
@@ -1208,9 +1224,9 @@ def generate_vessel_annotation_page(
                     <div class="card-features">{feat_str}</div>
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
+                    <button class="btn btn-yes" onclick="setLabel(&quot;{uid_js}&quot;, 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel(&quot;{uid_js}&quot;, 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel(&quot;{uid_js}&quot;, 0)">N</button>
                 </div>
             </div>
         </div>

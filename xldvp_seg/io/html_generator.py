@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from xldvp_seg.exceptions import ConfigError
-from xldvp_seg.io.html_utils import _esc, _js_esc  # noqa: F401 — used throughout this module
+from xldvp_seg.io.html_utils import (  # noqa: F401 — used throughout this module
+    _esc,
+    _esc_js_in_attr,
+    _js_esc,
+)
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -780,6 +784,7 @@ class HTMLPageGenerator:
             HTML string for the card.
         """
         uid = _esc(sample["uid"])
+        uid_js = _esc_js_in_attr(sample["uid"])  # nested escape for onclick
         img_b64 = sample["image"]
         mime = sample.get("mime_type", "jpeg")
         stats = sample.get("stats", {})
@@ -797,9 +802,9 @@ class HTMLPageGenerator:
                     <div class="card-stats">{stats_str}</div>
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-yes" onclick="setLabel('{uid}', 1)">Y</button>
-                    <button class="btn btn-unsure" onclick="setLabel('{uid}', 2)">?</button>
-                    <button class="btn btn-no" onclick="setLabel('{uid}', 0)">N</button>
+                    <button class="btn btn-yes" onclick="setLabel(&quot;{uid_js}&quot;, 1)">Y</button>
+                    <button class="btn btn-unsure" onclick="setLabel(&quot;{uid_js}&quot;, 2)">?</button>
+                    <button class="btn btn-no" onclick="setLabel(&quot;{uid_js}&quot;, 0)">N</button>
                 </div>
             </div>
         </div>

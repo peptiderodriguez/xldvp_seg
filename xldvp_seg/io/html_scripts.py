@@ -13,7 +13,7 @@ Extracted from ``html_export.py``. Contains:
 import json
 from pathlib import Path
 
-from xldvp_seg.io.html_utils import _esc, _js_esc
+from xldvp_seg.io.html_utils import _js_esc
 
 
 def generate_preload_annotations_js(
@@ -74,7 +74,9 @@ def generate_preload_annotations_js(
 
     # Escape </ sequences to prevent </script> injection in inline JS
     safe_json = json.dumps(ls_format).replace("</", r"<\/").replace("<!--", r"<\!--")
-    js_content = f"""// Pre-loaded annotations from {_esc(annotations_path.name)}
+    # Phase 2.6: _js_esc escapes `*/` and `</` so a hostile file stem can't
+    # break out of this JS comment (or a <script> block).
+    js_content = f"""// Pre-loaded annotations from {_js_esc(annotations_path.name)}
 // Generated automatically during HTML export
 // These are EXISTING annotations - new annotations take precedence
 

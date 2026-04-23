@@ -498,13 +498,29 @@ function tog(i, on) {{
 }}
 
 const ld = document.getElementById('layers');
+// Phase 2.4 fix: build DOM with textContent for l.name so a hostile layer
+// name (from file stems / label-map files) can't inject HTML.
 LAYERS.forEach((l, i) => {{
     const d = document.createElement('div');
     d.className = 'layer' + (l.filled ? ' filled' : '');
-    const tag = l.filled ? '<span class="tag f">filled</span>' : '<span class="tag c">clean</span>';
-    const checked = V.has(i) ? 'checked' : '';
-    d.innerHTML = '<label><input type=checkbox ' + checked + ' onchange="tog(' + i + ',this.checked)"><span>' +
-        l.name + '</span>' + tag + '<span class=n>' + l.n + '</span></label>';
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = V.has(i);
+    cb.addEventListener('change', (e) => tog(i, e.target.checked));
+    label.appendChild(cb);
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = l.name;
+    label.appendChild(nameSpan);
+    const tagSpan = document.createElement('span');
+    tagSpan.className = 'tag ' + (l.filled ? 'f' : 'c');
+    tagSpan.textContent = l.filled ? 'filled' : 'clean';
+    label.appendChild(tagSpan);
+    const nSpan = document.createElement('span');
+    nSpan.className = 'n';
+    nSpan.textContent = l.n;
+    label.appendChild(nSpan);
+    d.appendChild(label);
     ld.appendChild(d);
 }});
 </script></body></html>"""
