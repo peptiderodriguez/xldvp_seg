@@ -13,6 +13,11 @@ from xldvp_seg.exceptions import ConfigError, DetectionError
 from xldvp_seg.pipeline.preprocessing import apply_slide_preprocessing
 from xldvp_seg.pipeline.samples import generate_tile_grid
 from xldvp_seg.preprocessing import tissue_filter_cache as tissue_cache
+from xldvp_seg.utils.cache_utils import (
+    release_compute_lock,
+    try_acquire_compute_lock,
+    wait_for_compute,
+)
 from xldvp_seg.utils.json_utils import atomic_json_dump
 from xldvp_seg.utils.logging import get_logger
 
@@ -231,6 +236,7 @@ def setup_shared_memory(
     # default, or --flat-field-cache-dir if set). Benefits brightfield equally
     # since the filter runs for both modalities.
     tissue_cache_path = preprocessing_cache_dir / tissue_cache.CACHE_FILENAME
+    tissue_lock_path = preprocessing_cache_dir / tissue_cache.LOCK_FILENAME
     tissue_cache_meta = tissue_cache.build_cache_meta(
         args,
         tissue_channel=tissue_channel,
@@ -239,45 +245,17 @@ def setup_shared_memory(
         n_all_tiles=len(all_tiles),
     )
 
-    _cached = tissue_cache.load(tissue_cache_path, tissue_cache_meta)
-    if _cached is not None:
-        variance_threshold, tissue_tiles = _cached
-        logger.info(
-            "Loaded tissue filter from cache: threshold=%.1f, %d tissue tiles (skipped calibration + filter scan)",
-            variance_threshold,
-            len(tissue_tiles),
-        )
-    else:
-        if manual_threshold is not None:
-            variance_threshold = manual_threshold
-            logger.info(
-                f"Using manual variance threshold: {variance_threshold:.1f} (skipping K-means calibration)"
-            )
-        else:
-            logger.info("Calibrating tissue threshold...")
-            variance_threshold = calibrate_tissue_threshold(
-                all_tiles,
-                calibration_samples=min(50, len(all_tiles)),
-                channel=tissue_channel,
-                tile_size=args.tile_size,
-                loader=loader,  # Loader handles mosaic origin offset correctly
-            )
-        logger.info("Filtering to tissue-containing tiles...")
-        tissue_tiles = filter_tissue_tiles(
-            all_tiles,
-            variance_threshold,
-            channel=tissue_channel,
-            tile_size=args.tile_size,
-            loader=loader,  # Loader handles mosaic origin offset correctly
-            **filter_kwargs,
-        )
-        try:
-            tissue_cache.save(
-                tissue_cache_path, variance_threshold, tissue_tiles, tissue_cache_meta
-            )
-            logger.info("Saved tissue filter cache: %s", tissue_cache_path.name)
-        except OSError as exc:
-            logger.warning("Could not write tissue filter cache %s: %s", tissue_cache_path, exc)
+    variance_threshold, tissue_tiles = _load_or_compute_tissue_filter(
+        cache_path=tissue_cache_path,
+        lock_path=tissue_lock_path,
+        cache_meta=tissue_cache_meta,
+        all_tiles=all_tiles,
+        tissue_channel=tissue_channel,
+        manual_threshold=manual_threshold,
+        filter_kwargs=filter_kwargs,
+        args=args,
+        loader=loader,
+    )
 
     if len(tissue_tiles) == 0:
         raise DetectionError(
@@ -391,3 +369,86 @@ def setup_shared_memory(
         "h": h,
         "w": w,
     }
+
+
+def _load_or_compute_tissue_filter(
+    *,
+    cache_path,
+    lock_path,
+    cache_meta,
+    all_tiles,
+    tissue_channel,
+    manual_threshold,
+    filter_kwargs,
+    args,
+    loader,
+):
+    """Hit cache or acquire compute-lock and produce (threshold, tiles).
+
+    Mirrors the flat-field lock dance so N shards on cold start serialize the
+    ~3-4 min filter — only one computes, the rest poll then load. The lock is
+    released in ``finally`` so an exception mid-compute doesn't leak it. After
+    a stale-lock-aborted wait we loop back to acquire rather than computing
+    without the lock, preventing concurrent redundant recomputes.
+    """
+    cached = tissue_cache.load(cache_path, cache_meta)
+    if cached is not None:
+        threshold, tiles = cached
+        logger.info(
+            "Loaded tissue filter from cache: threshold=%.1f, %d tissue tiles "
+            "(skipped calibration + filter scan)",
+            threshold,
+            len(tiles),
+        )
+        return threshold, tiles
+
+    while True:
+        if try_acquire_compute_lock(lock_path):
+            try:
+                if manual_threshold is not None:
+                    threshold = manual_threshold
+                    logger.info(
+                        "Using manual variance threshold: %.1f (skipping K-means calibration)",
+                        threshold,
+                    )
+                else:
+                    logger.info("Calibrating tissue threshold...")
+                    threshold = calibrate_tissue_threshold(
+                        all_tiles,
+                        calibration_samples=min(50, len(all_tiles)),
+                        channel=tissue_channel,
+                        tile_size=args.tile_size,
+                        loader=loader,
+                    )
+                logger.info("Filtering to tissue-containing tiles...")
+                tiles = filter_tissue_tiles(
+                    all_tiles,
+                    threshold,
+                    channel=tissue_channel,
+                    tile_size=args.tile_size,
+                    loader=loader,
+                    **filter_kwargs,
+                )
+                try:
+                    tissue_cache.save(cache_path, threshold, tiles, cache_meta)
+                    logger.info("Saved tissue filter cache: %s", cache_path.name)
+                except OSError as exc:
+                    logger.warning("Could not write tissue filter cache %s: %s", cache_path, exc)
+                return threshold, tiles
+            finally:
+                release_compute_lock(lock_path)
+
+        # Another shard is computing — wait for the cache to land.
+        logger.info(
+            "Tissue filter is being computed by another process (lock=%s). Waiting...",
+            lock_path.name,
+        )
+        wait_for_compute(cache_path, lock_path)
+        cached = tissue_cache.load(cache_path, cache_meta)
+        if cached is not None:
+            threshold, tiles = cached
+            logger.info("Loaded tissue filter written by another shard (%d tiles).", len(tiles))
+            return threshold, tiles
+        # Wait exited without a cache hit — other shard crashed + lock was
+        # force-removed. Loop back and try to acquire so only one of the
+        # waiters recomputes.

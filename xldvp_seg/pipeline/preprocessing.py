@@ -6,14 +6,20 @@ All corrections modify the channel data arrays in-place.
 
 import gc
 import json
-import os
-import time
 import zipfile
 from pathlib import Path
 
 import numpy as np
 
 from xldvp_seg.exceptions import DataLoadError
+from xldvp_seg.utils.cache_utils import (
+    czi_identity,
+    get_scene,
+    meta_mismatch,
+    release_compute_lock,
+    try_acquire_compute_lock,
+    wait_for_compute,
+)
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -183,7 +189,7 @@ def _acquire_or_wait_for_profile(all_channel_data, cache_path, lock_path, cache_
         return estimate_illumination_profile(all_channel_data)
 
     while True:
-        if _try_acquire_compute_lock(lock_path):
+        if try_acquire_compute_lock(lock_path):
             try:
                 logger.info("Estimating slide-level illumination profile...")
                 profile = estimate_illumination_profile(all_channel_data)
@@ -194,17 +200,14 @@ def _acquire_or_wait_for_profile(all_channel_data, cache_path, lock_path, cache_
                     logger.warning("Could not write flat-field cache %s: %s", cache_path, exc)
                 return profile
             finally:
-                try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
+                release_compute_lock(lock_path)
 
         # Lock held by another process — wait for the cache to land.
         logger.info(
             "Flat-field profile is being computed by another process (lock=%s). Waiting...",
             lock_path.name,
         )
-        _wait_for_compute(cache_path, lock_path)
+        wait_for_compute(cache_path, lock_path)
         profile = _load_flat_field_cache(cache_path, cache_meta)
         if profile is not None:
             logger.info(
@@ -222,42 +225,38 @@ def _flat_field_cache_meta(args, all_channel_data: dict) -> dict:
 
     Anything that changes what the flat-field estimator *sees* must be in here,
     or a stale cache from a previous run with different settings could be
-    loaded. That includes CZI identity (path/mtime/size), channel selection,
-    slide shape, and whether photobleach correction runs before flat-field
-    (photobleach mutates the SHM data before flat-field estimates its profile,
-    so toggling it changes the correct profile).
+    loaded. That includes CZI identity (path/mtime/size), scene, channel
+    selection, slide shape, and whether photobleach correction runs before
+    flat-field (photobleach mutates the SHM data before flat-field estimates
+    its profile, so toggling it changes the correct profile).
     """
-    czi_path_str = str(getattr(args, "czi_path", ""))
-    czi_mtime: float = 0.0
-    czi_size: int = 0
-    try:
-        if czi_path_str:
-            st = os.stat(czi_path_str)
-            czi_mtime = float(st.st_mtime)
-            czi_size = int(st.st_size)
-    except OSError:
-        pass
     any_arr = next(iter(all_channel_data.values()))
-    # `or 0` guards against args.scene being explicitly None (hand-built
-    # SimpleNamespace in tests); argparse always gives an int default of 0.
-    scene = getattr(args, "scene", 0) or 0
     return {
-        "czi_path": czi_path_str,
-        "czi_mtime": czi_mtime,
-        "czi_size": czi_size,
-        "scene": int(scene),
+        **czi_identity(args),
+        "scene": get_scene(args),
         "channels": sorted(int(c) for c in all_channel_data),
         "slide_shape": [int(s) for s in any_arr.shape[:2]],
         "photobleaching_correction": bool(getattr(args, "photobleaching_correction", False)),
     }
 
 
+_FLAT_FIELD_META_KEYS = (
+    "czi_path",
+    "czi_size",
+    "scene",
+    "channels",
+    "slide_shape",
+    "photobleaching_correction",
+)
+
+
 def _load_flat_field_cache(cache_path: Path | None, expected_meta: dict):
     """Return a valid :class:`IlluminationProfile` from cache, or ``None``.
 
-    Any mismatch between cached metadata and the current run (czi identity,
-    shape, channel list) is treated as a miss so a stale slide's profile can
-    never contaminate a different run.
+    Mismatched metadata (different CZI / scene / shape / channel list) or a
+    truncated/corrupt npz is treated as a miss so a stale profile can never
+    contaminate a different run and a dead peer's half-write never crashes
+    the pipeline.
     """
     from xldvp_seg.preprocessing.flat_field import IlluminationProfile
 
@@ -271,28 +270,16 @@ def _load_flat_field_cache(cache_path: Path | None, expected_meta: dict):
         # (OSError). Any of these means we should recompute rather than crash.
         logger.info("Flat-field cache at %s unreadable (%s) — recomputing.", cache_path.name, exc)
         return None
-    for key in (
-        "czi_path",
-        "czi_size",
-        "scene",
-        "channels",
-        "slide_shape",
-        "photobleaching_correction",
-    ):
-        # Back-compat: pre-scene caches (written before scene was part of the
-        # cache key) were always implicitly scene=0 (single-scene was the only
-        # mode that ever reached the cache-write path). Treat missing as 0 so
-        # the currently-running job's already-written cache doesn't re-invalidate
-        # on a post-upgrade merge step. Remove this shim after a few releases.
-        cached_val = cached_meta.get(key, 0) if key == "scene" else cached_meta.get(key)
-        if cached_val != expected_meta.get(key):
-            logger.info(
-                "Flat-field cache stale: %s differs (cached=%r, current=%r). Recomputing.",
-                key,
-                cached_val,
-                expected_meta.get(key),
-            )
-            return None
+    mismatch = meta_mismatch(cached_meta, expected_meta, _FLAT_FIELD_META_KEYS)
+    if mismatch is not None:
+        key, stored, current = mismatch
+        logger.info(
+            "Flat-field cache stale: %s differs (stored=%r, current=%r). Recomputing.",
+            key,
+            stored,
+            current,
+        )
+        return None
     if abs(cached_meta.get("czi_mtime", 0.0) - expected_meta.get("czi_mtime", 0.0)) > 1.0:
         logger.info("Flat-field cache stale: czi_mtime differs. Recomputing.")
         return None
@@ -300,63 +287,9 @@ def _load_flat_field_cache(cache_path: Path | None, expected_meta: dict):
     return profile
 
 
-def _try_acquire_compute_lock(lock_path: Path | None) -> bool:
-    """Atomic advisory lock via ``O_CREAT | O_EXCL``.
-
-    Returns ``True`` if the lock was acquired (caller must compute + write the
-    cache + release the lock). Returns ``False`` if another process is already
-    computing — caller should wait.
-    """
-    if lock_path is None:
-        return True
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        return False
-    except OSError as exc:
-        logger.warning(
-            "Could not create flat-field lock %s: %s — proceeding without lock", lock_path, exc
-        )
-        return True  # degrade to no-lock rather than blocking
-    try:
-        os.write(fd, f"pid={os.getpid()}\nhost={os.uname().nodename}\n".encode())
-    finally:
-        os.close(fd)
-    return True
-
-
-def _wait_for_compute(
-    cache_path: Path, lock_path: Path, *, poll_sec: int = 30, stale_sec: int = 3 * 3600
-) -> None:
-    """Poll for the cache file to land, handling stale locks.
-
-    Returns once either (a) the cache file exists, (b) the lock disappeared
-    (caller should retry), or (c) the lock mtime exceeds ``stale_sec`` (lock is
-    forcibly removed and caller retries).
-    """
-    start = time.time()
-    while True:
-        if cache_path.exists():
-            return
-        if not lock_path.exists():
-            return
-        try:
-            lock_age = time.time() - lock_path.stat().st_mtime
-        except FileNotFoundError:
-            return
-        if lock_age > stale_sec:
-            logger.warning(
-                "Flat-field compute lock is %.1f h old — removing and retrying.", lock_age / 3600
-            )
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
-            return
-        if time.time() - start > stale_sec:
-            logger.warning("Giving up waiting for flat-field cache — will recompute locally.")
-            return
-        time.sleep(poll_sec)
+# Back-compat test aliases — real implementations live in xldvp_seg.utils.cache_utils.
+_try_acquire_compute_lock = try_acquire_compute_lock
+_wait_for_compute = wait_for_compute
 
 
 def _apply_reinhard_normalization(args, all_channel_data, loader):

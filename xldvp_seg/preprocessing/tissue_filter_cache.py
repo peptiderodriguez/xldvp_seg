@@ -7,10 +7,10 @@ invocation and takes ~3-4 min per shard for whole-mouse slides. Output is
 tile grid, and the tissue channel. Cache it so reruns, resumes, and merge
 steps skip the recompute.
 
-Unlike the flat-field cache, this is cheap enough that concurrent recompute
-by racing shards on a cold start is tolerable — no advisory lock. The first
-shard to finish atomically writes the JSON; subsequent shards will read it
-on their next invocation / resume.
+A POSIX ``O_CREAT|O_EXCL`` advisory lock (``tissue_filter.computing``)
+serializes the first compute across concurrent shards on a cold start — so
+only one of N shards spends ~3-4 min computing and the others poll briefly
+then load the cache. Stale-lock recovery after 3h matches flat-field.
 
 Parallel to ``xldvp_seg.preprocessing.flat_field`` in its public shape:
 
@@ -25,9 +25,9 @@ Parallel to ``xldvp_seg.preprocessing.flat_field`` in its public shape:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from xldvp_seg.utils.cache_utils import czi_identity, get_scene, meta_mismatch
 from xldvp_seg.utils.json_utils import atomic_json_dump, fast_json_load
 from xldvp_seg.utils.logging import get_logger
 
@@ -39,6 +39,21 @@ logger = get_logger(__name__)
 ALGORITHM_VERSION = "1.0"
 
 CACHE_FILENAME = "tissue_filter.json"
+LOCK_FILENAME = "tissue_filter.computing"
+
+
+_META_KEYS = (
+    "czi_path",
+    "czi_size",
+    "scene",
+    "tile_size",
+    "tile_overlap",
+    "tissue_channel",
+    "modality",
+    "manual_threshold",
+    "n_all_tiles",
+    "algorithm_version",
+)
 
 
 def build_cache_meta(
@@ -57,24 +72,9 @@ def build_cache_meta(
     coincidentally-identical slide_shape across scenes (e.g. multi-well plates
     where each well is a scene) but different pixel data.
     """
-    czi_path_str = str(getattr(args, "czi_path", ""))
-    czi_mtime: float = 0.0
-    czi_size: int = 0
-    try:
-        if czi_path_str:
-            st = os.stat(czi_path_str)
-            czi_mtime = float(st.st_mtime)
-            czi_size = int(st.st_size)
-    except OSError:
-        pass
-    # `or 0` guards against args.scene being explicitly None (hand-built
-    # SimpleNamespace in tests); argparse always gives an int default of 0.
-    scene = getattr(args, "scene", 0) or 0
     return {
-        "czi_path": czi_path_str,
-        "czi_mtime": czi_mtime,
-        "czi_size": czi_size,
-        "scene": int(scene),
+        **czi_identity(args),
+        "scene": get_scene(args),
         "tile_size": int(args.tile_size),
         "tile_overlap": float(args.tile_overlap),
         "tissue_channel": int(tissue_channel),
@@ -105,32 +105,16 @@ def load(cache_path: Path | None, expected_meta: dict) -> tuple[float, list[dict
         logger.info("Tissue cache at %s has unexpected shape — recomputing.", cache_path)
         return None
     cached_meta = payload.get("__meta__", {})
-    for key in (
-        "czi_path",
-        "czi_size",
-        "scene",
-        "tile_size",
-        "tile_overlap",
-        "tissue_channel",
-        "modality",
-        "manual_threshold",
-        "n_all_tiles",
-        "algorithm_version",
-    ):
-        # Back-compat: caches written before `scene` joined the cache key were
-        # always implicitly scene=0 (single-scene was the only mode that wrote
-        # a cache). Treat missing scene as 0 so a post-upgrade merge / resume
-        # against an already-populated cache doesn't re-invalidate. Remove this
-        # shim after a few releases when no pre-scene caches remain in the wild.
-        cached_val = cached_meta.get(key, 0) if key == "scene" else cached_meta.get(key)
-        if cached_val != expected_meta.get(key):
-            logger.info(
-                "Tissue cache stale: %s differs (cached=%r, current=%r). Recomputing.",
-                key,
-                cached_val,
-                expected_meta.get(key),
-            )
-            return None
+    mismatch = meta_mismatch(cached_meta, expected_meta, _META_KEYS)
+    if mismatch is not None:
+        key, stored, current = mismatch
+        logger.info(
+            "Tissue cache stale: %s differs (stored=%r, current=%r). Recomputing.",
+            key,
+            stored,
+            current,
+        )
+        return None
     if abs(cached_meta.get("czi_mtime", 0.0) - expected_meta.get("czi_mtime", 0.0)) > 1.0:
         logger.info("Tissue cache stale: czi_mtime differs. Recomputing.")
         return None
@@ -178,6 +162,7 @@ def save(
 __all__ = [
     "ALGORITHM_VERSION",
     "CACHE_FILENAME",
+    "LOCK_FILENAME",
     "build_cache_meta",
     "load",
     "save",
