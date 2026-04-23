@@ -76,6 +76,20 @@ def setup_shared_memory(
     output_dir = Path(output_dir)
     slide_name = Path(getattr(args, "czi_path", "slide")).stem
 
+    # Resolve the slide output directory up front so slide-wide preprocessing
+    # (flat-field cache in particular) can read/write into it. Previously this
+    # was computed after preprocessing, which meant every shard redundantly
+    # recomputed the ~1h-2h illumination profile because no shared cache path
+    # was known yet.
+    pct = int(args.sample_fraction * 100)
+    if getattr(args, "resume", None):
+        slide_output_dir = Path(args.resume)
+    elif getattr(args, "resume_from", None):
+        slide_output_dir = Path(args.resume_from)
+    else:
+        slide_output_dir = output_dir / f"{slide_name}_{run_timestamp}_{pct}pct"
+    slide_output_dir.mkdir(parents=True, exist_ok=True)
+
     # ---- Channel assignment summary — prominent, self-documenting ----
     logger.info("=" * 70)
     logger.info("CHANNEL ASSIGNMENTS")
@@ -167,8 +181,10 @@ def setup_shared_memory(
         # Build all_channel_data as views into SHM (for preprocessing, resume HTML, etc.)
         all_channel_data = {ch: slide_shm_arr[:, :, ch_to_slot[ch]] for ch in ch_list}
 
-    # Apply slide-wide preprocessing on SHM views (modifies data in-place)
-    apply_slide_preprocessing(args, all_channel_data, loader)
+    # Apply slide-wide preprocessing on SHM views (modifies data in-place).
+    # slide_output_dir was resolved up front so the flat-field cache can be
+    # shared across shards and ``--resume`` runs.
+    apply_slide_preprocessing(args, all_channel_data, loader, slide_output_dir=slide_output_dir)
 
     # Generate tile grid (using global coordinates)
     overlap = args.tile_overlap
@@ -234,16 +250,11 @@ def setup_shared_memory(
     # so all nodes agree on the same ordering regardless of np.random.choice order
     sampled_tiles.sort(key=lambda t: (t["y"], t["x"]))  # sort by (y, x)
 
-    # Setup output directories (timestamped to avoid overwriting previous runs)
-    pct = int(args.sample_fraction * 100)
-    if getattr(args, "resume", None):
-        slide_output_dir = Path(args.resume)
+    # slide_output_dir was resolved up front (before preprocessing) so the
+    # flat-field cache path is known when apply_slide_preprocessing runs.
+    # Create the tiles subdir now that we know we'll need it.
+    if getattr(args, "resume", None) or getattr(args, "resume_from", None):
         logger.info(f"Resuming into existing output directory: {slide_output_dir}")
-    elif getattr(args, "resume_from", None):
-        slide_output_dir = Path(args.resume_from)
-        logger.info(f"Resuming into existing output directory: {slide_output_dir}")
-    else:
-        slide_output_dir = output_dir / f"{slide_name}_{run_timestamp}_{pct}pct"
     tiles_dir = slide_output_dir / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
 

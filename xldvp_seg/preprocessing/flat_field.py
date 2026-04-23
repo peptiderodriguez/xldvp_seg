@@ -24,6 +24,9 @@ Usage:
 """
 
 import gc
+import json
+import os
+from pathlib import Path
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
@@ -31,6 +34,11 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from xldvp_seg.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# Bump when the estimate_illumination_profile algorithm changes in a way that
+# invalidates cached profiles from earlier runs.
+ALGORITHM_VERSION = "1.0"
 
 
 class IlluminationProfile:
@@ -135,6 +143,58 @@ class IlluminationProfile:
             correction_min,
             correction_max,
         )
+
+    def save(self, path, *, metadata: dict) -> None:
+        """Serialize profile + metadata to ``.npz`` via atomic rename.
+
+        Writes via ``{path}.partial.npz`` (``np.savez_compressed`` auto-appends
+        ``.npz`` to its target path) then atomically renames it into place.
+        Metadata must be JSON-serializable — typically CZI identity + shape +
+        channel list + photobleach flag so cache freshness is validatable.
+        """
+        path = Path(path)
+        # np.savez_compressed appends .npz to its target. Use a name ending in
+        # .partial.npz so the eventual rename hits the intended path.
+        tmp_base = path.with_name(path.stem + ".partial")
+        tmp_file = tmp_base.with_suffix(tmp_base.suffix + ".npz")
+        channels = sorted(self.grids.keys())
+        save_args: dict = {
+            "algorithm_version": np.array([ALGORITHM_VERSION]),
+            "block_size": np.array([self.block_size], dtype=np.int32),
+            "channels": np.array(channels, dtype=np.int32),
+            "slide_means": np.array([self.slide_means[c] for c in channels], dtype=np.float64),
+            "metadata": np.frombuffer(
+                json.dumps(metadata, sort_keys=True).encode("utf-8"), dtype=np.uint8
+            ),
+        }
+        for c in channels:
+            save_args[f"grid_{c}"] = self.grids[c]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(str(tmp_base), **save_args)  # writes tmp_file
+        os.replace(tmp_file, path)
+
+    @classmethod
+    def load(cls, path) -> "tuple[IlluminationProfile, dict]":
+        """Load from ``.npz``. Returns ``(profile, metadata_dict)``.
+
+        Raises ``ValueError`` if the file's ``algorithm_version`` doesn't match
+        the current module version — callers should treat that as a cache miss
+        and recompute.
+        """
+        path = Path(path)
+        data = np.load(path, allow_pickle=False)
+        version = str(data["algorithm_version"][0])
+        if version != ALGORITHM_VERSION:
+            raise ValueError(
+                f"Flat-field cache algorithm_version={version!r} does not match "
+                f"current {ALGORITHM_VERSION!r}"
+            )
+        block_size = int(data["block_size"][0])
+        channels = [int(c) for c in data["channels"]]
+        slide_means = {c: float(v) for c, v in zip(channels, data["slide_means"], strict=True)}
+        grids = {c: np.asarray(data[f"grid_{c}"], dtype=np.float32) for c in channels}
+        metadata = json.loads(bytes(data["metadata"]).decode("utf-8"))
+        return cls(grids, block_size, slide_means), metadata
 
 
 def estimate_illumination_profile(
