@@ -350,10 +350,13 @@ class ModelManager:
         from cellpose.models import CellposeModel
 
         logger.info("Loading Cellpose-SAM...")
-        from xldvp_seg.utils.device import device_supports_gpu
+        from xldvp_seg.utils.device import cellpose_supports_bfloat16, device_supports_gpu
 
         self._cellpose = CellposeModel(
-            pretrained_model="cpsam", gpu=device_supports_gpu(self.device), device=self.device
+            pretrained_model="cpsam",
+            gpu=device_supports_gpu(self.device),
+            device=self.device,
+            use_bfloat16=cellpose_supports_bfloat16(),
         )
         logger.info("Cellpose loaded successfully")
 

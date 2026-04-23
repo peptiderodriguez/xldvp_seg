@@ -162,10 +162,12 @@ def _gpu_worker(
         try:
             from cellpose import models as cellpose_models
 
-            from xldvp_seg.utils.device import device_supports_gpu
+            from xldvp_seg.utils.device import cellpose_supports_bfloat16, device_supports_gpu
 
             cellpose_model = cellpose_models.CellposeModel(
-                gpu=device_supports_gpu(device), pretrained_model="cpsam"
+                gpu=device_supports_gpu(device),
+                pretrained_model="cpsam",
+                use_bfloat16=cellpose_supports_bfloat16(),
             )
             models["cellpose"] = cellpose_model
             logger.info(f"[{worker_name}] Cellpose loaded")

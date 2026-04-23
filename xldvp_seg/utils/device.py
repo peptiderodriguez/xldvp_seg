@@ -97,6 +97,23 @@ def device_supports_gpu(device) -> bool:
     return device.type in ("cuda", "mps")
 
 
+def cellpose_supports_bfloat16() -> bool:
+    """True iff the installed torch implements the kernel Cellpose-SAM needs in BFloat16.
+
+    Cellpose 4.x defaults ``use_bfloat16=True``. Inside its SAM backbone the relative
+    position encoding calls ``F.interpolate(mode="linear")`` → ``upsample_linear1d``.
+    That kernel only got a BFloat16 implementation in torch 2.3. Older torch raises
+    ``"upsample_linear1d_out_frame" not implemented for 'BFloat16'`` on every tile,
+    producing zero detections with a clean exit. Version-gate to avoid that.
+    """
+    parts = torch.__version__.split("+")[0].split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        return False
+    return (major, minor) >= (2, 3)
+
+
 __all__ = [
     "get_default_device",
     "get_device_count",
@@ -104,4 +121,5 @@ __all__ = [
     "empty_cache",
     "set_device_for_worker",
     "device_supports_gpu",
+    "cellpose_supports_bfloat16",
 ]

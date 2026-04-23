@@ -63,6 +63,7 @@ def _phase4_worker(
     )
     from xldvp_seg.processing.shm_attach import attach_slide_shm
     from xldvp_seg.utils.device import (
+        cellpose_supports_bfloat16,
         device_supports_gpu,
         empty_cache,
         set_device_for_worker,
@@ -88,7 +89,9 @@ def _phase4_worker(
         from cellpose import models as cellpose_models
 
         cellpose_model = cellpose_models.CellposeModel(
-            gpu=device_supports_gpu(device), pretrained_model="cpsam"
+            gpu=device_supports_gpu(device),
+            pretrained_model="cpsam",
+            use_bfloat16=cellpose_supports_bfloat16(),
         )
     except Exception as e:
         logger.error("[%s] Cellpose load failed: %s", worker_name, e)

@@ -50,6 +50,18 @@ xlseg manifold-sample \
     --priority composite
 ```
 
+### Key flags
+
+**Pre-filter** (cells dropped before FPS):
+- `--filter-area-min-um2 / --filter-area-max-um2` — LMD-cuttable size window. Set to the physical range your laser can cleanly cut.
+- `--min-solidity FLOAT` (default `0.0` = off) — drop cells with `area/convex_hull_area < thr`. Try `0.75` to trim fused/broken masks.
+- `--min-max-channel-snr FLOAT` (default `0.0` = off) — drop cells where no channel has `SNR ≥ thr`. Try `1.5` to trim masks over empty tissue.
+- Drop counts per filter land in `manifold_sample_stats.json` → `prefilter_stats` so you can tune without overdoing it.
+
+**Annotation workflow** (optional, when you want to winner-take-all-label each manifold group before LMD):
+- `--exemplars-per-group N` — after Voronoi, write `manifold_exemplars.json` containing the N cells closest to each anchor (deduped — each cell in exactly one group). Feeds `regenerate_html.py` to produce annotation cards.
+- See [Annotation workflow](#annotation-workflow) below.
+
 Typical wall time for 500K cells on 1× L40S + 32 CPUs:
 
 | Step | Time |
@@ -75,9 +87,10 @@ See [`examples/configs/manifold_sample.yaml`](../examples/configs/manifold_sampl
 | `manifold_sample_stats.json` | per-group/per-organ counts |
 
 Cache invalidates on any change to: `feature_groups`, pre-filter thresholds
-(`nuc_filter_*`, `area_filter_*`), `max_pcs`, `pca_variance`, `seed`,
-`exclude_channels`, `feature_group_weights`, `k_anchors`, `outlier_method`,
-`outlier_threshold`, `organ_field`, `organ_drop_value`.
+(`nuc_filter_*`, `area_filter_*`, `min_solidity`, `min_max_channel_snr`),
+`max_pcs`, `pca_variance`, `seed`, `exclude_channels`, `feature_group_weights`,
+`k_anchors`, `outlier_method`, `outlier_threshold`, `organ_field`,
+`organ_drop_value`.
 
 ## Viewer
 
@@ -91,6 +104,56 @@ python scripts/manifold_viewer.py \
 
 Produces a linked 3D-UMAP + slide thumbnail HTML. Click a group in UMAP →
 its cells light up on the slide.
+
+Pass `--annotations kept_groups.json` (from the aggregator, below) to dim
+dropped manifold groups to 25% brightness and show per-group stats in the
+info panel.
+
+## Annotation workflow
+
+When you want each manifold group labeled (keep / drop) before sending pools
+to LMD — e.g. to enrich for a specific cell type via winner-take-all voting.
+
+1. **Sample exemplars during `manifold-sample`**:
+   ```
+   xlseg manifold-sample ... --exemplars-per-group 5
+   ```
+   Writes `manifold_exemplars.json` (up to 5 cells per group, closest to
+   anchor, outliers excluded).
+
+2. **Generate annotation card-grid HTML**:
+   ```
+   scripts/regenerate_html.py \
+       --detections <OUT>/manifold_exemplars.json \
+       --cell-type cell --czi-path <CZI> \
+       --output-dir <OUT> --html-dir <OUT>/annotation_cards \
+       --display-channels "2,4" --dashed-contour --contour-thickness 6 \
+       --sort-by area --sort-order desc
+   ```
+   Open `index.html`, mark positive / negative / unsure. Export
+   `cell_annotations.json`.
+
+3. **Aggregate votes** (`scripts/aggregate_group_annotations.py`):
+   ```
+   scripts/aggregate_group_annotations.py \
+       --annotations cell_annotations.json \
+       --manifold-dir <OUT> \
+       --threshold 0.60 --min-annotated 3
+   ```
+   A group is kept iff `positive / (positive + negative) ≥ threshold` AND it
+   has ≥ `min_annotated` votes. `unsure` counts toward `n_annotated` but not
+   the fraction. Writes:
+   - `kept_groups.json` — per-group stats + keep flag
+   - `lmd_selected_positive.json` / `.csv` — replicates filtered to kept
+     groups only (ready for `xlseg export-lmd`).
+
+   **Choosing threshold**: for pure-population LMD (proteomics/MS), use
+   **0.80-0.90** — 60% allows ~40% contamination, which dilutes MS signal.
+   For enrichment / scRNA-seq where identity is resolved per-cell, 0.60 is
+   fine.
+
+4. **Review** via the viewer (step 2 of the previous section) with
+   `--annotations kept_groups.json`.
 
 ## Design choices
 

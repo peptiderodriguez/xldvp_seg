@@ -319,12 +319,23 @@ class CellDetector:
 
         logger.info(f"Loading Cellpose ({self._cellpose_model}) on {self.device}...")
 
-        from xldvp_seg.utils.device import device_supports_gpu
+        from xldvp_seg.utils.device import cellpose_supports_bfloat16, device_supports_gpu
+
+        _use_bf16 = cellpose_supports_bfloat16()
+        if not _use_bf16:
+            import torch as _torch
+
+            logger.info(
+                "Cellpose BFloat16 disabled (torch %s < 2.3 lacks upsample_linear1d "
+                "BFloat16 kernel used by Cellpose-SAM). Using fp32; ~20%% slower but correct.",
+                _torch.__version__,
+            )
 
         self._cellpose = CellposeModel(
             pretrained_model=self._cellpose_model,
             gpu=device_supports_gpu(self.device),
             device=self.device,
+            use_bfloat16=_use_bf16,
         )
 
         logger.info("Cellpose loaded successfully")

@@ -90,10 +90,18 @@ def calibrate_islet_marker_gmm(
     try:
         from cellpose.models import CellposeModel
 
-        from xldvp_seg.utils.device import device_supports_gpu, get_default_device
+        from xldvp_seg.utils.device import (
+            cellpose_supports_bfloat16,
+            device_supports_gpu,
+            get_default_device,
+        )
 
         _device = get_default_device()
-        cellpose_model = CellposeModel(gpu=device_supports_gpu(_device), pretrained_model="cpsam")
+        cellpose_model = CellposeModel(
+            gpu=device_supports_gpu(_device),
+            pretrained_model="cpsam",
+            use_bfloat16=cellpose_supports_bfloat16(),
+        )
     except Exception as e:
         logger.warning(f"Failed to load Cellpose for calibration: {e}")
         return {}
